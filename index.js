@@ -6,6 +6,7 @@ export default class aeionChannel {
     this.config = config;
     this.context = context;
     this.socket = null;
+    this.typingTimers = new Map();
   }
 
   async start() {
@@ -24,6 +25,7 @@ export default class aeionChannel {
     this.socket.on("msg", async (payload) => {
       const { to, td, by, m, b, _id } = payload;
       let mediaPaths = [];
+      const typingKey = this.getTypingKey(to, td);
 
       this.context.logger.info(`[aeion] new message`);
 
@@ -58,17 +60,22 @@ export default class aeionChannel {
         }
       }
 
-      await this.context.receive({
-        text: m,
-        sender: by?.n || "aeionUser",
-        channel: "aeion",
-        MediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
-        metadata: {
-          botId: to,
-          roomId: td,
-          msgId: _id
-        }
-      });
+      this.startTyping(to, td);
+      try {
+        await this.context.receive({
+          text: m,
+          sender: by?.n || "aeionUser",
+          channel: "aeion",
+          MediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
+          metadata: {
+            botId: to,
+            roomId: td,
+            msgId: _id
+          }
+        });
+      } finally {
+        this.stopTyping(to, td, typingKey);
+      }
     });
 
     this.socket.on("connect", () => {
@@ -113,8 +120,42 @@ export default class aeionChannel {
     }
   }
 
+  getTypingKey(botId, roomId) {
+    return `${botId || ""}:${roomId || ""}`;
+  }
+
+  emitTypingEvent(eventName, botId, roomId) {
+    if (!this.socket) return;
+    const payload = { to: botId };
+    if (roomId) payload.td = roomId;
+    this.socket.emit(eventName, payload);
+  }
+
+  startTyping(botId, roomId) {
+    const key = this.getTypingKey(botId, roomId);
+    this.stopTyping(botId, roomId, key);
+    this.emitTypingEvent("typing", botId, roomId);
+    const timer = setInterval(() => {
+      this.emitTypingEvent("typing", botId, roomId);
+    }, 4000);
+    this.typingTimers.set(key, timer);
+  }
+
+  stopTyping(botId, roomId, key = this.getTypingKey(botId, roomId)) {
+    const timer = this.typingTimers.get(key);
+    if (timer) {
+      clearInterval(timer);
+      this.typingTimers.delete(key);
+    }
+    this.emitTypingEvent("typing_stop", botId, roomId);
+  }
+
   async stop() {
     if (this.socket) {
+      for (const timer of this.typingTimers.values()) {
+        clearInterval(timer);
+      }
+      this.typingTimers.clear();
       this.socket.close();
       this.context.logger.info("[aeion] Bridge stopped.");
     }

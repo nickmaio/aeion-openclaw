@@ -21,8 +21,6 @@ npm install
 openclaw plugins install .
 ```
 
-If you publish this package to your plugin registry, install it using that published package name instead.
-
 ## Configuration
 
 Add the `aeion` channel to your OpenClaw config:
