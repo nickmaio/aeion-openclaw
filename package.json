@@ -1,0 +1,21 @@
+{
+  "name": "aeion-openclaw",
+  "version": "1.0.2",
+  "description": "Bridges OpenClaw to aeion platform via WebSockets.",
+  "main": "index.js",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "socket.io-client": "^4.7.0",
+    "undici": "^7.16.0"
+  },
+  "keywords": [
+    "openclaw",
+    "aeion",
+    "ai-bridge"
+  ],
+  "author": "Nick Maio",
+  "license": "MIT"
+}
