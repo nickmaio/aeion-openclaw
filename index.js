@@ -1,5 +1,12 @@
 import { fetch } from "undici";
 import { io } from "socket.io-client";
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
+import { aeionPlugin } from "./src/channel.js";
+
+const CHANNEL_ID = "aeion";
+const PLUGIN_ID = "aeion-openclaw";
+const PLUGIN_NAME = "aeion platform bridge";
+const PLUGIN_DESCRIPTION = "Bridge for aeion messenger";
 
 export class aeionChannel {
   constructor(config, context) {
@@ -12,6 +19,10 @@ export class aeionChannel {
   async start() {
     const { apiKey } = this.config;
     const serverUrl = "https://api.aeion.org/";
+
+    if (!apiKey) {
+      throw new Error("aeion: apiKey is required");
+    }
 
     this.context.logger.info(`[aeion] initializing bridge for user key: ${apiKey.substring(0, 3)}...`);
 
@@ -162,6 +173,20 @@ export class aeionChannel {
   }
 }
 
-export const register = (reg) => {
-  reg.extension('channel', 'aeion', aeionChannel);
+export const registerLegacyChannel = (reg) => {
+  reg.extension("channel", CHANNEL_ID, aeionChannel);
 };
+
+export const register = registerLegacyChannel;
+
+export default defineChannelPluginEntry({
+  id: PLUGIN_ID,
+  name: PLUGIN_NAME,
+  description: PLUGIN_DESCRIPTION,
+  plugin: aeionPlugin,
+  registerFull(api) {
+    if (typeof api.extension === "function") {
+      registerLegacyChannel(api);
+    }
+  },
+});

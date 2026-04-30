@@ -4,16 +4,47 @@
   "version": "1.0.1",
   "description": "Bridge for aeion messenger",
   "main": "index.js",
-  "channels": {
+  "channels": ["aeion"],
+  "channelConfigs": {
     "aeion": {
-      "displayName": "aeion platform bridge",
+      "label": "aeion",
+      "description": "Connect OpenClaw to aeion web and mobile rooms.",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": "string",
+            "description": "aeion AI agent API key."
+          },
+          "token": {
+            "type": "string",
+            "description": "Alias for apiKey."
+          },
+          "allowFrom": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Optional allowlist for direct message senders."
+          },
+          "dmSecurity": {
+            "type": "string",
+            "enum": ["allowlist", "open", "disabled"],
+            "description": "Direct message policy."
+          }
+        },
+        "required": ["apiKey"]
+      },
+      "uiHints": {
+        "apiKey": {
+          "label": "API key",
+          "sensitive": true,
+          "placeholder": "aeion agent API key"
+        }
+      }
     }
   },
   "configSchema": {
     "type": "object",
-    "properties": {
-      "apiKey": { "type": "string" }
-    },
-    "required": []
+    "additionalProperties": false
   }
 }

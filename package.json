@@ -11,8 +11,37 @@
     "socket.io-client": "^4.7.0",
     "undici": "^7.16.0"
   },
+  "files": [
+    "index.js",
+    "setup-entry.js",
+    "src",
+    "openclaw.plugin.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "peerDependencies": {
+    "openclaw": ">=2026.3.23-2"
+  },
+  "devDependencies": {
+    "openclaw": "^2026.3.23-2"
+  },
   "openclaw": {
-    "extensions": ["./index.js"]
+    "extensions": ["./index.js"],
+    "setupEntry": "./setup-entry.js",
+    "channel": {
+      "id": "aeion",
+      "label": "aeion",
+      "selectionLabel": "aeion",
+      "detailLabel": "aeion platform bridge",
+      "docsPath": "https://aeion.org/",
+      "blurb": "Connect OpenClaw to aeion web and mobile rooms.",
+      "markdownCapable": true,
+      "exposure": {
+        "configured": true,
+        "setup": true,
+        "docs": true
+      }
+    }
   },
   "keywords": [
     "openclaw",
