@@ -1,4 +1,4 @@
-# aeion OpenClaw Bridge
+# aeion OpenClaw bridge
 
 Connect OpenClaw to the aeion platform at <https://aeion.org/>. This bridge lets you chat with your OpenClaw agent from aeion web and mobile rooms.
 
