@@ -1,7 +1,7 @@
 import { fetch } from "undici";
 import { io } from "socket.io-client";
 
-export default class aeionChannel {
+export class aeionChannel {
   constructor(config, context) {
     this.config = config;
     this.context = context;
@@ -161,3 +161,5 @@ export default class aeionChannel {
     }
   }
 }
+
+export const aeion = aeionChannel;
