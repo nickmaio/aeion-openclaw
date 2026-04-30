@@ -163,5 +163,5 @@ export class aeionChannel {
 }
 
 export const register = (reg) => {
-  reg.channel("aeion", aeionChannel);
+  reg.extension('channel', 'aeion', aeionChannel);
 };
