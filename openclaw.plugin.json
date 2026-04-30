@@ -8,5 +8,12 @@
     "aeion": {
       "displayName": "aeion platform bridge",
     }
+  },
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "apiKey": { "type": "string" }
+    },
+    "required": []
   }
 }
