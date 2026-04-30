@@ -18,7 +18,6 @@
         "title": "API Key",
         "description": "Your aeion.org user bridge API key"
       }
-    },
-    "required": ["apiKey"]
+    }
   }
 }
