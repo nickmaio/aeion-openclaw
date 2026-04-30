@@ -162,4 +162,6 @@ export class aeionChannel {
   }
 }
 
-export const aeion = aeionChannel;
+export const register = async (reg) => {
+  reg.channel("aeion", aeionChannel);
+};
