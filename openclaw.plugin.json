@@ -6,18 +6,7 @@
   "main": "index.js",
   "channels": {
     "aeion": {
-      "displayName": "aeion platform",
-      "description": "Custom socket-based aeon platform channel"
-    }
-  },
-  "configSchema": {
-    "type": "object",
-    "properties": {
-      "apiKey": {
-        "type": "string",
-        "title": "API Key",
-        "description": "Your aeion.org user bridge API key"
-      }
+      "displayName": "aeion platform bridge",
     }
   }
 }
