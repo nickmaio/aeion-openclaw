@@ -36,7 +36,7 @@ If you are replacing an existing copied install, add `--force`.
 
 ## Configuration
 
-Add the `aeion` channel to your OpenClaw config:
+Add the `aeion` channel to your OpenClaw config **in the `channels` section** (not `plugins.entries`):
 
 ```json
 {
@@ -48,8 +48,6 @@ Add the `aeion` channel to your OpenClaw config:
   }
 }
 ```
-
-`token` is also accepted as an alias for `apiKey`.
 
 Optional direct-message controls:
 
@@ -83,5 +81,14 @@ The plugin should report channel `aeion` with status `loaded`.
 ```bash
 openclaw gateway restart
 ```
+
+## Troubleshooting
+
+**Error: "Unrecognized key: '***'" in plugins.entries.aeion-openclaw**
+
+This error occurs when the `apiKey` is placed in `plugins.entries.aeion-openclaw` instead of `channels.aeion`. Verify your config structure matches the Configuration section above—the API key must be in the `channels` section, not in `plugins.entries`.
+
+Built by following the OpenClaw plugin development guide:
+<https://docs.openclaw.ai/plugins/sdk-channel-plugins>
 
 MIT (c) Nick Maio
