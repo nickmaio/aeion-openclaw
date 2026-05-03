@@ -42,12 +42,13 @@ Add the `aeion` channel to your OpenClaw config **in the `channels` section** (n
 {
   "channels": {
     "aeion": {
-      "enabled": true,
       "apiKey": "YOUR_API_KEY"
     }
   }
 }
 ```
+
+`token` is also accepted as an alias for `apiKey`.
 
 Optional direct-message controls:
 
@@ -55,7 +56,6 @@ Optional direct-message controls:
 {
   "channels": {
     "aeion": {
-      "enabled": true,
       "apiKey": "YOUR_API_KEY",
       "dmSecurity": "allowlist",
       "allowFrom": ["USER_OR_ROOM_ID"]
@@ -84,9 +84,15 @@ openclaw gateway restart
 
 ## Troubleshooting
 
-**Error: "Unrecognized key: '***'" in plugins.entries.aeion-openclaw**
+**Error: "Unrecognized key: '***'" or config validation failures**
 
-This error occurs when the `apiKey` is placed in `plugins.entries.aeion-openclaw` instead of `channels.aeion`. Verify your config structure matches the Configuration section above—the API key must be in the `channels` section, not in `plugins.entries`.
+This error occurs when:
+- The `apiKey` is placed in `plugins.entries.aeion-openclaw` instead of `channels.aeion` (wrong section)
+- The channel config includes `"enabled": true`—this is not a valid property for channels (only for plugin entries)
+
+Verify your config structure matches the Configuration section above:
+- API key and optional settings go in `channels.aeion`
+- `plugins.entries.aeion-openclaw` should only contain `"enabled": true`
 
 Built by following the OpenClaw plugin development guide:
 <https://docs.openclaw.ai/plugins/sdk-channel-plugins>
