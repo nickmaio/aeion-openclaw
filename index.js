@@ -175,13 +175,10 @@ export default function register(api) {
       config: {
         listAccountIds: (cfg) => {
           const aeionCfg = cfg.channels?.aeion;
-          const result = aeionCfg?.apiKey || aeionCfg?.token ? ["default"] : [];
-          api.logger.info(`[aeion] listAccountIds called, returning: ${JSON.stringify(result)}`);
-          return result;
+          return aeionCfg?.apiKey || aeionCfg?.token ? ["default"] : [];
         },
         resolveAccount: (cfg, id) => {
           const aeionCfg = cfg.channels?.aeion || {};
-          api.logger.info(`[aeion] resolveAccount called with id: ${id}`);
           return {
             apiKey: aeionCfg.apiKey || aeionCfg.token,
             allowFrom: aeionCfg.allowFrom || [],
@@ -190,28 +187,20 @@ export default function register(api) {
         },
       },
       inbound: {
-        create: async (account, api) => {
-          api.logger.info("[aeion] Creating inbound channel instance...");
-          const channel = new AeionChannel(account, api);
-          api.logger.info("[aeion] Calling start() method...");
+        create: async (account, channelApi) => {
+          api.logger.info("[aeion] ✓ inbound.create called - instantiating channel");
+          const channel = new AeionChannel(account, channelApi);
+          api.logger.info("[aeion] Starting socket connection...");
           await channel.start();
-          api.logger.info("[aeion] ✓ Channel started successfully");
+          api.logger.info("[aeion] ✓ Channel fully initialized and connected");
           return channel;
         },
       },
       outbound: {
-        create: (account, api) => {
-          api.logger.info("[aeion] Creating outbound channel instance...");
-          return new AeionChannel(account, api);
+        create: (account, channelApi) => {
+          api.logger.info("[aeion] Creating outbound channel instance");
+          return new AeionChannel(account, channelApi);
         },
         deliveryMode: "direct",
-        sendText: async ({ text, target, account, api }) => {
-          // This would be called when sending messages
-          return { ok: true };
-        },
-      },
-    },
-  });
-
-  api.logger.info("[aeion] ✓ Plugin registration complete");
-}
+        sendText: async ({ text, target, account, channelApi }) => {
+          api.logger.info(`[aeion] sendText called: "${text}" to ${target}`);
