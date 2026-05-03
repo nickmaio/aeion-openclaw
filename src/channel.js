@@ -75,3 +75,10 @@ export const aeionPlugin = createChatChannelPlugin({
 
   threading: { topLevelReplyToMode: "reply" },
 });
+
+// Ensure listAccountIds is accessible at the plugin level
+aeionPlugin.listAccountIds = (cfg) => {
+  const section = readAeionChannelConfig(cfg);
+  const hasApiKey = Boolean(section.apiKey || section.token);
+  return hasApiKey ? ["default"] : [];
+};

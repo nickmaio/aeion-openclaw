@@ -184,11 +184,6 @@ export default defineChannelPluginEntry({
   name: PLUGIN_NAME,
   description: PLUGIN_DESCRIPTION,
   plugin: aeionPlugin,
-  listAccountIds(cfg) {
-    const section = cfg?.channels?.aeion || {};
-    const hasApiKey = Boolean(section.apiKey || section.token);
-    return hasApiKey ? ["default"] : [];
-  },
   registerFull(api) {
     if (typeof api.extension === "function") {
       registerLegacyChannel(api);
