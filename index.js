@@ -1,6 +1,8 @@
 import { fetch } from "undici";
 import { io } from "socket.io-client";
 
+console.log("[aeion] Module loaded");
+
 const CHANNEL_ID = "aeion";
 
 class AeionChannel {
@@ -173,6 +175,7 @@ class AeionChannel {
 }
 
 export default function register(api) {
+  console.log("[aeion] register() function called");
   api.logger.info("[aeion] Plugin registration starting...");
 
   api.registerChannel({
