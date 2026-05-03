@@ -153,6 +153,8 @@ class AeionChannel {
 }
 
 export default function register(api) {
+  api.logger.info("[aeion] Plugin registration starting...");
+
   api.registerChannel({
     plugin: {
       id: CHANNEL_ID,
@@ -173,10 +175,13 @@ export default function register(api) {
       config: {
         listAccountIds: (cfg) => {
           const aeionCfg = cfg.channels?.aeion;
-          return aeionCfg?.apiKey || aeionCfg?.token ? ["default"] : [];
+          const result = aeionCfg?.apiKey || aeionCfg?.token ? ["default"] : [];
+          api.logger.info(`[aeion] listAccountIds called, returning: ${JSON.stringify(result)}`);
+          return result;
         },
         resolveAccount: (cfg, id) => {
           const aeionCfg = cfg.channels?.aeion || {};
+          api.logger.info(`[aeion] resolveAccount called with id: ${id}`);
           return {
             apiKey: aeionCfg.apiKey || aeionCfg.token,
             allowFrom: aeionCfg.allowFrom || [],
@@ -184,8 +189,21 @@ export default function register(api) {
           };
         },
       },
+      inbound: {
+        create: async (account, api) => {
+          api.logger.info("[aeion] Creating inbound channel instance...");
+          const channel = new AeionChannel(account, api);
+          api.logger.info("[aeion] Calling start() method...");
+          await channel.start();
+          api.logger.info("[aeion] ✓ Channel started successfully");
+          return channel;
+        },
+      },
       outbound: {
-        create: (account, api) => new AeionChannel(account, api),
+        create: (account, api) => {
+          api.logger.info("[aeion] Creating outbound channel instance...");
+          return new AeionChannel(account, api);
+        },
         deliveryMode: "direct",
         sendText: async ({ text, target, account, api }) => {
           // This would be called when sending messages
@@ -194,4 +212,6 @@ export default function register(api) {
       },
     },
   });
+
+  api.logger.info("[aeion] ✓ Plugin registration complete");
 }
