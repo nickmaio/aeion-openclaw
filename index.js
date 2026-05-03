@@ -209,6 +209,6 @@ export default function register(api) {
       },
     },
   });
-  
+
   api.logger.info("[aeion] ✓ Plugin registration complete");
 }
