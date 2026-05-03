@@ -1,6 +1,6 @@
 # aeion OpenClaw bridge
 
-Connect OpenClaw to the aeion platform at <https://aeion.org/>. This native OpenClaw channel plugin lets you chat with your OpenClaw agent from aeion web and mobile rooms.
+Connect OpenClaw to the aeion platform at <https://aeion.org/>. This native OpenClaw channel plugin lets you chat with your OpenClaw agent from aeion UI.
 
 ## Prerequisites
 
@@ -36,19 +36,26 @@ If you are replacing an existing copied install, add `--force`.
 
 ## Configuration
 
-Add the `aeion` channel to your OpenClaw config **in the `channels` section** (not `plugins.entries`):
+Add the `aeion` channel and plugin allowlist to your OpenClaw config:
 
 ```json
 {
   "channels": {
     "aeion": {
-      "apiKey": "YOUR_API_KEY"
+      "apiKey": "YOUR_API_KEY",
+      "dmSecurity": "open"
+    }
+  },
+  "plugins": {
+    "allow": ["aeion-openclaw"],
+    "entries": {
+      "aeion-openclaw": {
+        "enabled": true
+      }
     }
   }
 }
 ```
-
-`token` is also accepted as an alias for `apiKey`.
 
 Optional direct-message controls:
 
@@ -93,6 +100,10 @@ This error occurs when:
 Verify your config structure matches the Configuration section above:
 - API key and optional settings go in `channels.aeion`
 - `plugins.entries.aeion-openclaw` should only contain `"enabled": true`
+
+**Warning: "plugins.allow is empty; discovered non-bundled plugins may auto-load"**
+
+This is a security notice. Add `plugins.allow` to your config to explicitly trust the plugin (see Configuration section above). Include `"aeion-openclaw"` in the `plugins.allow` array.
 
 Built by following the OpenClaw plugin development guide:
 <https://docs.openclaw.ai/plugins/sdk-channel-plugins>
