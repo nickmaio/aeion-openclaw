@@ -1,4 +1,5 @@
-import { defineSetupPluginEntry } from "openclaw/plugin-sdk/channel-core";
-import { aeionPlugin } from "./src/channel.js";
-
-export default defineSetupPluginEntry(aeionPlugin);
+// Setup entry for aeion channel plugin
+export default function setupEntry(api) {
+  // Modern OpenClaw API handles setup through the plugin config
+  // No additional setup needed
+}
