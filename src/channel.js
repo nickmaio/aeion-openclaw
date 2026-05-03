@@ -1,4 +1,291 @@
-// Legacy file - all channel logic is now in index.js
-// This file is kept for backwards compatibility if needed
+import { fetch } from "undici";
+import { io } from "socket.io-client";
 
-export const CHANNEL_ID = "aeion";
+const CHANNEL_ID = "aeion";
+
+class AeionChannel {
+  constructor(account, api) {
+    this.account = account;
+    this.api = api;
+    this.socket = null;
+    this.typingTimers = new Map();
+    this.api.logger.info("[aeion] AeionChannel instance created");
+  }
+
+  async start() {
+    try {
+      const { apiKey } = this.account;
+      const serverUrl = "https://api.aeion.org/";
+
+      this.api.logger.info("[aeion] Starting channel with API key: " + (apiKey ? apiKey.substring(0, 3) + "..." : "MISSING"));
+
+      if (!apiKey) {
+        throw new Error("aeion: apiKey is required");
+      }
+
+      this.api.logger.info(`[aeion] initializing bridge for user key: ${apiKey.substring(0, 3)}...`);
+
+      this.socket = io(serverUrl, {
+        auth: { token: 'Bearer ' + apiKey, agent: 'OpenClaw', platform: 'aeion' },
+        reconnection: true,
+        withCredentials: true,
+        reconnectionAttempts: 10
+      });
+
+      // Wait for socket to connect before returning
+      await new Promise((resolve, reject) => {
+        const connectTimeout = setTimeout(() => {
+          reject(new Error("Socket connection timeout after 10 seconds"));
+        }, 10000);
+
+        this.socket.on("connect", () => {
+          clearTimeout(connectTimeout);
+          this.api.logger.info("✓ [aeion] Connected to aeion API server");
+          resolve();
+        });
+
+        this.socket.on("connect_error", (err) => {
+          clearTimeout(connectTimeout);
+          this.api.logger.error(`✗ [aeion] Connection Error: ${err.message}`);
+          reject(err);
+        });
+
+        this.socket.on("error", (err) => {
+          clearTimeout(connectTimeout);
+          this.api.logger.error(`✗ [aeion] Socket Error: ${err}`);
+          reject(err);
+        });
+      });
+
+      // Now set up message handlers after connection is established
+      this.socket.on("msg", async (payload) => {
+        const { to, td, by, m, b, _id } = payload;
+        this.api.logger.info(`[aeion] ✓ MESSAGE RECEIVED from ${by?.n} to bot ${to} in room ${td}`);
+        this.api.logger.info(`[aeion] Message text: "${m}"`);
+        this.api.logger.info(`[aeion] Attachments: ${b ? b.length : 0}`);
+
+        let mediaPaths = [];
+        const typingKey = this.getTypingKey(to, td);
+
+        if (b && b.length > 0) {
+          for (let i = 0; i < b.length; i++) {
+            const fileInfo = b[i];
+            const fileUrl = `${serverUrl}/api/msgo/att/${_id}/${i}/${fileInfo.n}`;
+
+            try {
+              this.api.logger.info(`[aeion] Downloading attachment: ${fileInfo.n}`);
+
+              const response = await fetch(fileUrl, {
+                headers: { 'Authorization': `Bearer ${apiKey}` }
+              });
+
+              if (!response.ok) {
+                throw new Error(`HTTP ${response.status} ${response.statusText}`);
+              }
+
+              const buffer = Buffer.from(await response.arrayBuffer());
+              const savedFile = await this.api.saveMediaBuffer(buffer, fileInfo.n, fileInfo.t);
+              mediaPaths.push(savedFile.path);
+              this.api.logger.info(`[aeion] ✓ Attachment saved: ${savedFile.path}`);
+            } catch (err) {
+              this.api.logger.error(`[aeion] Failed to download ${fileInfo.n}: ${err.message}`);
+            }
+          }
+        }
+
+        this.startTyping(to, td);
+        try {
+          this.api.logger.info(`[aeion] Forwarding message to OpenClaw...`);
+          await this.api.receive({
+            text: m,
+            sender: by?.n || "aeionUser",
+            channel: CHANNEL_ID,
+            mediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
+            metadata: {
+              botId: to,
+              roomId: td,
+              msgId: _id
+            }
+          });
+          this.api.logger.info(`[aeion] ✓ Message forwarded to OpenClaw successfully`);
+        } catch (err) {
+          this.api.logger.error(`[aeion] ✗ Error forwarding message: ${err.message}`);
+        } finally {
+          this.stopTyping(to, td, typingKey);
+        }
+      });
+
+      this.socket.on("disconnect", () => {
+        this.api.logger.warn("[aeion] Disconnected from aeion API server");
+      });
+
+      this.api.logger.info("[aeion] ✓ Socket fully initialized and listening for messages");
+    } catch (err) {
+      this.api.logger.error(`✗ [aeion] FATAL ERROR in start(): ${err.message}`);
+      this.api.logger.error(`[aeion] Stack: ${err.stack}`);
+      throw err;
+    }
+  }
+
+  getTypingKey(botId, roomId) {
+    return `${botId || ""}:${roomId || ""}`;
+  }
+
+  emitTypingEvent(eventName, botId, roomId) {
+    if (!this.socket) return;
+    const payload = { to: botId };
+    if (roomId) payload.td = roomId;
+    this.socket.emit(eventName, payload);
+  }
+
+  startTyping(botId, roomId) {
+    const key = this.getTypingKey(botId, roomId);
+    this.stopTyping(botId, roomId, key);
+    this.emitTypingEvent("typing", botId, roomId);
+    const timer = setInterval(() => {
+      this.emitTypingEvent("typing", botId, roomId);
+    }, 4000);
+    this.typingTimers.set(key, timer);
+  }
+
+  stopTyping(botId, roomId, key = this.getTypingKey(botId, roomId)) {
+    const timer = this.typingTimers.get(key);
+    if (timer) {
+      clearInterval(timer);
+      this.typingTimers.delete(key);
+    }
+    this.emitTypingEvent("typing_stop", botId, roomId);
+  }
+
+  async send(envelope) {
+    const { text, metadata, attachments } = envelope;
+    const { botId, roomId } = metadata || {};
+
+    if (!this.socket) {
+      this.api.logger.error("[aeion] Cannot send: socket not initialized");
+      return;
+    }
+
+    if (!roomId || !botId) {
+      this.api.logger.warn("[aeion] Cannot send: missing botId or roomId in metadata");
+      return;
+    }
+
+    this.api.logger.info(`[aeion] Sending response to room: ${botId}-${roomId}`);
+
+    const payload = {
+      m: text,
+      to: botId,
+      td: roomId,
+      atts: []
+    };
+
+    if (attachments?.length > 0) {
+      try {
+        payload.atts = await Promise.all(attachments.map(async (attr) => {
+          const buffer = await this.api.readMediaFile(attr.path);
+          return {
+            name: attr.name,
+            type: attr.mimeType,
+            size: attr.size,
+            data: buffer.toString('base64')
+          };
+        }));
+        this.api.logger.info(`[aeion] Sending ${attachments.length} attachment(s)`);
+      } catch (err) {
+        this.api.logger.error(`[aeion] Error processing attachments: ${err.message}`);
+      }
+    }
+
+    try {
+      this.socket.emit("msg_send", payload);
+      this.api.logger.info(`[aeion] ✓ Message sent: "${text}"`);
+    } catch (err) {
+      this.api.logger.error(`[aeion] ✗ Error sending message: ${err.message}`);
+    }
+  }
+
+  async stop() {
+    this.api.logger.info("[aeion] Stopping channel...");
+    if (this.socket) {
+      for (const timer of this.typingTimers.values()) {
+        clearInterval(timer);
+      }
+      this.typingTimers.clear();
+      this.socket.close();
+      this.api.logger.info("[aeion] ✓ Bridge stopped.");
+    } else {
+      this.api.logger.warn("[aeion] Socket was not initialized");
+    }
+  }
+}
+
+export const aeionPlugin = {
+  id: CHANNEL_ID,
+  meta: {
+    id: CHANNEL_ID,
+    label: "aeion",
+    selectionLabel: "aeion",
+    detailLabel: "aeion platform bridge",
+    docsPath: "https://aeion.org/",
+    docsLabel: "aeion",
+    blurb: "Connect OpenClaw to aeion web and mobile rooms.",
+    markdownCapable: true,
+  },
+  capabilities: {
+    chatTypes: ["direct"],
+    supports: { mentions: false },
+  },
+  config: {
+    listAccountIds: (cfg) => {
+      const aeionCfg = cfg.channels?.aeion;
+      return aeionCfg?.apiKey || aeionCfg?.token ? ["default"] : [];
+    },
+    resolveAccount: (cfg, id) => {
+      const aeionCfg = cfg.channels?.aeion || {};
+      return {
+        apiKey: aeionCfg.apiKey || aeionCfg.token,
+        allowFrom: aeionCfg.allowFrom || [],
+        dmPolicy: aeionCfg.dmSecurity || "allowlist",
+      };
+    },
+  },
+  inbound: {
+    create: async (account, api) => {
+      api.logger.info("[aeion] ✓ inbound.create called - instantiating channel");
+      const channel = new AeionChannel(account, api);
+      try {
+        api.logger.info("[aeion] Starting socket connection...");
+        await channel.start();
+        api.logger.info("[aeion] ✓ Channel fully initialized and connected");
+        return channel;
+      } catch (err) {
+        api.logger.error(`[aeion] ✗ inbound.create failed: ${err.message}`);
+        throw err;
+      }
+    },
+  },
+  outbound: {
+    create: (account, api) => {
+      api.logger.info("[aeion] Creating outbound channel instance");
+      return new AeionChannel(account, api);
+    },
+    deliveryMode: "direct",
+    sendText: async ({ text, target, account, api, metadata, attachments }) => {
+      api.logger.info(`[aeion] sendText called: "${text}"`);
+
+      // target is the channel instance created above
+      if (target && typeof target.send === 'function') {
+        await target.send({
+          text,
+          metadata,
+          attachments
+        });
+        return { ok: true, sent: true };
+      } else {
+        api.logger.error("[aeion] sendText: target channel not available");
+        return { ok: false, error: "Channel not available" };
+      }
+    },
+  },
+};
