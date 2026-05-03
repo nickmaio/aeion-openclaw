@@ -32,6 +32,32 @@ class AeionChannel {
         reconnectionAttempts: 10
       });
 
+      // Wait for socket to connect before returning
+      await new Promise((resolve, reject) => {
+        const connectTimeout = setTimeout(() => {
+          reject(new Error("Socket connection timeout after 10 seconds"));
+        }, 10000);
+
+        this.socket.on("connect", () => {
+          clearTimeout(connectTimeout);
+          this.api.logger.info("✓ [aeion] Connected to aeion API server");
+          resolve();
+        });
+
+        this.socket.on("connect_error", (err) => {
+          clearTimeout(connectTimeout);
+          this.api.logger.error(`✗ [aeion] Connection Error: ${err.message}`);
+          reject(err);
+        });
+
+        this.socket.on("error", (err) => {
+          clearTimeout(connectTimeout);
+          this.api.logger.error(`✗ [aeion] Socket Error: ${err}`);
+          reject(err);
+        });
+      });
+
+      // Now set up message handlers after connection is established
       this.socket.on("msg", async (payload) => {
         const { to, td, by, m, b, _id } = payload;
         this.api.logger.info(`[aeion] ✓ MESSAGE RECEIVED from ${by?.n} to bot ${to} in room ${td}`);
@@ -89,23 +115,11 @@ class AeionChannel {
         }
       });
 
-      this.socket.on("connect", () => {
-        this.api.logger.info("✓ [aeion] Connected to aeion API server");
-      });
-
       this.socket.on("disconnect", () => {
         this.api.logger.warn("[aeion] Disconnected from aeion API server");
       });
 
-      this.socket.on("connect_error", (err) => {
-        this.api.logger.error(`✗ [aeion] Connection Error: ${err.message}`);
-      });
-
-      this.socket.on("error", (err) => {
-        this.api.logger.error(`✗ [aeion] Socket Error: ${err}`);
-      });
-
-      this.api.logger.info("[aeion] Socket listeners configured, waiting for messages...");
+      this.api.logger.info("[aeion] ✓ Socket fully initialized and listening for messages");
     } catch (err) {
       this.api.logger.error(`✗ [aeion] FATAL ERROR in start(): ${err.message}`);
       this.api.logger.error(`[aeion] Stack: ${err.stack}`);
