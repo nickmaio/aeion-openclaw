@@ -211,12 +211,18 @@ export default function register(api) {
       },
       inbound: {
         create: async (account, channelApi) => {
-          api.logger.info("[aeion] ✓ inbound.create called - instantiating channel");
+          console.log("[aeion] inbound.create CALLED");
+          channelApi.logger.info("[aeion] ✓ inbound.create called");
           const channel = new AeionChannel(account, channelApi);
-          api.logger.info("[aeion] Starting socket connection...");
-          await channel.start();
-          api.logger.info("[aeion] ✓ Channel fully initialized and connected");
-          return channel;
+          try {
+            await channel.start();
+            channelApi.logger.info("[aeion] ✓ Channel connected");
+            return channel;
+          } catch (err) {
+            console.error("[aeion] inbound.create ERROR:", err);
+            channelApi.logger.error(`[aeion] inbound.create failed: ${err.message}`);
+            throw err;
+          }
         },
       },
       outbound: {
