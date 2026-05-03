@@ -56,6 +56,11 @@ export const aeionPlugin = createChatChannelPlugin({
           tokenStatus: configured ? "available" : "missing",
         };
       },
+      listAccountIds(cfg) {
+        const section = readAeionChannelConfig(cfg);
+        const hasApiKey = Boolean(section.apiKey || section.token);
+        return hasApiKey ? ["default"] : [];
+      },
     },
   }),
 
