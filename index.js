@@ -204,3 +204,11 @@ export default function register(api) {
         deliveryMode: "direct",
         sendText: async ({ text, target, account, channelApi }) => {
           api.logger.info(`[aeion] sendText called: "${text}" to ${target}`);
+          return { ok: true };
+        },
+      },
+    },
+  });
+  
+  api.logger.info("[aeion] ✓ Plugin registration complete");
+}
