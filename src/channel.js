@@ -100,6 +100,13 @@ class AeionChannelRuntime {
       this.log?.info(`[aeion] ✓ MESSAGE RECEIVED from ${by?.n} to bot ${to} in room ${td}`);
       this.log?.info(`[aeion] Message text: "${m}"`);
 
+      const core = getAeionRuntime();
+      this.log?.info(`[aeion] DEBUG: core = ${core ? 'defined' : 'undefined'}`);
+      if (core) {
+        this.log?.info(`[aeion] DEBUG: core.channel = ${core.channel ? 'defined' : 'undefined'}`);
+        this.log?.info(`[aeion] DEBUG: core.channel.reply = ${core.channel?.reply ? 'defined' : 'undefined'}`);
+      }
+
       let mediaPaths = [];
       const serverUrl = "https://api.aeion.org/";
 
@@ -292,7 +299,10 @@ export const aeionPlugin = {
       ctx.setStatus({ accountId: account.accountId || "default", running: true });
 
       // Store the plugin-global runtime reference
+      ctx.log?.info(`[aeion] DEBUG: Setting runtime reference...`);
       setAeionRuntime(ctx.runtime);
+      const checkRuntime = getAeionRuntime();
+      ctx.log?.info(`[aeion] DEBUG: After setAeionRuntime, getAeionRuntime() = ${checkRuntime ? 'defined' : 'undefined'}`);
 
       try {
         const runtime = new AeionChannelRuntime(account, ctx.log);
