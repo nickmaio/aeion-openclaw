@@ -3,10 +3,20 @@ import { io } from "socket.io-client";
 
 const CHANNEL_ID = "aeion";
 
+// Store plugin-global runtime reference (set during gateway.startAccount)
+let pluginRuntime = null;
+
+function setAeionRuntime(runtime) {
+  pluginRuntime = runtime;
+}
+
+function getAeionRuntime() {
+  return pluginRuntime;
+}
+
 class AeionChannelRuntime {
-  constructor(account, ctx, log) {
+  constructor(account, log) {
     this.account = account;
-    this.ctx = ctx;
     this.log = log;
     this.socket = null;
     this.typingTimers = new Map();
@@ -110,7 +120,8 @@ class AeionChannelRuntime {
             }
 
             const buffer = Buffer.from(await response.arrayBuffer());
-            const savedFile = await this.ctx.runtime.channel.media.saveMediaBuffer(buffer, fileInfo.t, "inbound");
+            const core = getAeionRuntime();
+            const savedFile = await core.channel.media.saveMediaBuffer(buffer, fileInfo.t, "inbound");
             mediaPaths.push(savedFile);
             this.log?.info(`[aeion] ✓ Attachment saved: ${savedFile}`);
           } catch (err) {
@@ -149,12 +160,13 @@ class AeionChannelRuntime {
         contextPayload.NumMedia = mediaPaths.length;
       }
 
-      const finalContext = this.ctx.runtime.channel.reply.finalizeInboundContext(contextPayload);
+      const core = getAeionRuntime();
+      const finalContext = core.channel.reply.finalizeInboundContext(contextPayload);
 
       this.log?.info(`[aeion] Dispatching message to agent...`);
 
       // Create dispatcher for replies
-      const { dispatcher, replyOptions, markDispatchIdle } = this.ctx.runtime.channel.reply.createReplyDispatcherWithTyping({
+      const { dispatcher, replyOptions, markDispatchIdle } = core.channel.reply.createReplyDispatcherWithTyping({
         deliver: async (payload) => {
           await this.sendMessage(payload, to, td);
         },
@@ -165,9 +177,9 @@ class AeionChannelRuntime {
       });
 
       try {
-        await this.ctx.runtime.channel.reply.dispatchReplyFromConfig({
+        await core.channel.reply.dispatchReplyFromConfig({
           ctx: finalContext,
-          cfg: this.ctx.runtime.cfg,
+          cfg: core.cfg,
           dispatcher,
           replyOptions,
         });
@@ -279,8 +291,11 @@ export const aeionPlugin = {
       ctx.log?.info("[aeion] Starting gateway account...");
       ctx.setStatus({ accountId: account.accountId || "default", running: true });
 
+      // Store the plugin-global runtime reference
+      setAeionRuntime(ctx.runtime);
+
       try {
-        const runtime = new AeionChannelRuntime(account, ctx, ctx.log);
+        const runtime = new AeionChannelRuntime(account, ctx.log);
         await runtime.start(ctx.abortSignal);
       } catch (err) {
         ctx.log?.error(`[aeion] Gateway error: ${err.message}`);
