@@ -4,9 +4,9 @@ import { io } from "socket.io-client";
 const CHANNEL_ID = "aeion";
 
 class AeionChannelRuntime {
-  constructor(account, runtime, log) {
+  constructor(account, ctx, log) {
     this.account = account;
-    this.runtime = runtime;
+    this.ctx = ctx;
     this.log = log;
     this.socket = null;
     this.typingTimers = new Map();
@@ -110,7 +110,7 @@ class AeionChannelRuntime {
             }
 
             const buffer = Buffer.from(await response.arrayBuffer());
-            const savedFile = await this.runtime.channel.media.saveMediaBuffer(buffer, fileInfo.t, "inbound");
+            const savedFile = await this.ctx.runtime.channel.media.saveMediaBuffer(buffer, fileInfo.t, "inbound");
             mediaPaths.push(savedFile);
             this.log?.info(`[aeion] ✓ Attachment saved: ${savedFile}`);
           } catch (err) {
@@ -149,12 +149,12 @@ class AeionChannelRuntime {
         contextPayload.NumMedia = mediaPaths.length;
       }
 
-      const finalContext = this.runtime.channel.reply.finalizeInboundContext(contextPayload);
+      const finalContext = this.ctx.runtime.channel.reply.finalizeInboundContext(contextPayload);
 
       this.log?.info(`[aeion] Dispatching message to agent...`);
 
       // Create dispatcher for replies
-      const { dispatcher, replyOptions, markDispatchIdle } = this.runtime.channel.reply.createReplyDispatcherWithTyping({
+      const { dispatcher, replyOptions, markDispatchIdle } = this.ctx.runtime.channel.reply.createReplyDispatcherWithTyping({
         deliver: async (payload) => {
           await this.sendMessage(payload, to, td);
         },
@@ -165,9 +165,9 @@ class AeionChannelRuntime {
       });
 
       try {
-        await this.runtime.channel.reply.dispatchReplyFromConfig({
+        await this.ctx.runtime.channel.reply.dispatchReplyFromConfig({
           ctx: finalContext,
-          cfg: this.runtime.cfg,
+          cfg: this.ctx.runtime.cfg,
           dispatcher,
           replyOptions,
         });
@@ -280,7 +280,7 @@ export const aeionPlugin = {
       ctx.setStatus({ accountId: account.accountId || "default", running: true });
 
       try {
-        const runtime = new AeionChannelRuntime(account, ctx.runtime, ctx.log);
+        const runtime = new AeionChannelRuntime(account, ctx, ctx.log);
         await runtime.start(ctx.abortSignal);
       } catch (err) {
         ctx.log?.error(`[aeion] Gateway error: ${err.message}`);
