@@ -250,42 +250,38 @@ export const aeionPlugin = {
       };
     },
   },
-  inbound: {
-    create: async (account, api) => {
-      api.logger.info("[aeion] ✓ inbound.create called - instantiating channel");
-      const channel = new AeionChannel(account, api);
-      try {
-        api.logger.info("[aeion] Starting socket connection...");
-        await channel.start();
-        api.logger.info("[aeion] ✓ Channel fully initialized and connected");
-        return channel;
-      } catch (err) {
-        api.logger.error(`[aeion] ✗ inbound.create failed: ${err.message}`);
-        throw err;
-      }
-    },
-  },
-  outbound: {
-    create: (account, api) => {
-      api.logger.info("[aeion] Creating outbound channel instance");
-      return new AeionChannel(account, api);
-    },
-    deliveryMode: "direct",
-    sendText: async ({ text, target, account, api, metadata, attachments }) => {
-      api.logger.info(`[aeion] sendText called: "${text}"`);
+  channels: {
+    [CHANNEL_ID]: {
+      create: async (account, api) => {
+        console.log("[aeion] channels.create() called");
+        api.logger.info("[aeion] ✓ Channel create called - instantiating");
+        const channel = new AeionChannel(account, api);
+        try {
+          api.logger.info("[aeion] Starting socket connection...");
+          await channel.start();
+          api.logger.info("[aeion] ✓ Channel fully initialized and connected");
+          return channel;
+        } catch (err) {
+          console.error("[aeion] Channel creation ERROR:", err.message);
+          api.logger.error(`[aeion] ✗ Channel creation failed: ${err.message}`);
+          throw err;
+        }
+      },
+      sendText: async ({ text, target, account, api, metadata, attachments }) => {
+        api.logger.info(`[aeion] sendText called: "${text}"`);
 
-      // target is the channel instance created above
-      if (target && typeof target.send === 'function') {
-        await target.send({
-          text,
-          metadata,
-          attachments
-        });
-        return { ok: true, sent: true };
-      } else {
-        api.logger.error("[aeion] sendText: target channel not available");
-        return { ok: false, error: "Channel not available" };
-      }
-    },
+        if (target && typeof target.send === 'function') {
+          await target.send({
+            text,
+            metadata,
+            attachments
+          });
+          return { ok: true, sent: true };
+        } else {
+          api.logger.error("[aeion] sendText: target channel not available");
+          return { ok: false, error: "Channel not available" };
+        }
+      },
+    }
   },
 };
