@@ -58,6 +58,7 @@ class AeionChannelRuntime {
 
       // Set up message handler
       this.socket.on("msg", async (payload) => {
+        console.log("[aeion] Received message event:", payload);
         await this.handleInboundMessage(payload);
       });
 
