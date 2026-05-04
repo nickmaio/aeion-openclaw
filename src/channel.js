@@ -3,27 +3,25 @@ import { io } from "socket.io-client";
 
 const CHANNEL_ID = "aeion";
 
-class AeionChannel {
-  constructor(account, api) {
+class AeionChannelRuntime {
+  constructor(account, runtime, log) {
     this.account = account;
-    this.api = api;
+    this.runtime = runtime;
+    this.log = log;
     this.socket = null;
     this.typingTimers = new Map();
-    this.api.logger.info("[aeion] AeionChannel instance created");
   }
 
-  async start() {
+  async start(abortSignal) {
     try {
       const { apiKey } = this.account;
       const serverUrl = "https://api.aeion.org/";
 
-      this.api.logger.info("[aeion] Starting channel with API key: " + (apiKey ? apiKey.substring(0, 3) + "..." : "MISSING"));
+      this.log?.info(`[aeion] Starting connection with API key: ${apiKey ? apiKey.substring(0, 3) + "..." : "MISSING"}`);
 
       if (!apiKey) {
         throw new Error("aeion: apiKey is required");
       }
-
-      this.api.logger.info(`[aeion] initializing bridge for user key: ${apiKey.substring(0, 3)}...`);
 
       this.socket = io(serverUrl, {
         auth: { token: 'Bearer ' + apiKey, agent: 'OpenClaw', platform: 'aeion' },
@@ -32,7 +30,7 @@ class AeionChannel {
         reconnectionAttempts: 10
       });
 
-      // Wait for socket to connect before returning
+      // Wait for socket to connect
       await new Promise((resolve, reject) => {
         const connectTimeout = setTimeout(() => {
           reject(new Error("Socket connection timeout after 10 seconds"));
@@ -40,182 +38,192 @@ class AeionChannel {
 
         this.socket.on("connect", () => {
           clearTimeout(connectTimeout);
-          this.api.logger.info("✓ [aeion] Connected to aeion API server");
+          this.log?.info("✓ [aeion] Connected to aeion API server");
           resolve();
         });
 
         this.socket.on("connect_error", (err) => {
           clearTimeout(connectTimeout);
-          this.api.logger.error(`✗ [aeion] Connection Error: ${err.message}`);
+          this.log?.error(`✗ [aeion] Connection Error: ${err.message}`);
           reject(err);
         });
 
         this.socket.on("error", (err) => {
           clearTimeout(connectTimeout);
-          this.api.logger.error(`✗ [aeion] Socket Error: ${err}`);
+          this.log?.error(`✗ [aeion] Socket Error: ${err}`);
           reject(err);
         });
       });
 
-      // Now set up message handlers after connection is established
+      // Set up message handler
       this.socket.on("msg", async (payload) => {
-        const { to, td, by, m, b, _id } = payload;
-        this.api.logger.info(`[aeion] ✓ MESSAGE RECEIVED from ${by?.n} to bot ${to} in room ${td}`);
-        this.api.logger.info(`[aeion] Message text: "${m}"`);
-        this.api.logger.info(`[aeion] Attachments: ${b ? b.length : 0}`);
-
-        let mediaPaths = [];
-        const typingKey = this.getTypingKey(to, td);
-
-        if (b && b.length > 0) {
-          for (let i = 0; i < b.length; i++) {
-            const fileInfo = b[i];
-            const fileUrl = `${serverUrl}/api/msgo/att/${_id}/${i}/${fileInfo.n}`;
-
-            try {
-              this.api.logger.info(`[aeion] Downloading attachment: ${fileInfo.n}`);
-
-              const response = await fetch(fileUrl, {
-                headers: { 'Authorization': `Bearer ${apiKey}` }
-              });
-
-              if (!response.ok) {
-                throw new Error(`HTTP ${response.status} ${response.statusText}`);
-              }
-
-              const buffer = Buffer.from(await response.arrayBuffer());
-              const savedFile = await this.api.saveMediaBuffer(buffer, fileInfo.n, fileInfo.t);
-              mediaPaths.push(savedFile.path);
-              this.api.logger.info(`[aeion] ✓ Attachment saved: ${savedFile.path}`);
-            } catch (err) {
-              this.api.logger.error(`[aeion] Failed to download ${fileInfo.n}: ${err.message}`);
-            }
-          }
-        }
-
-        this.startTyping(to, td);
-        try {
-          this.api.logger.info(`[aeion] Forwarding message to OpenClaw...`);
-          await this.api.receive({
-            text: m,
-            sender: by?.n || "aeionUser",
-            channel: CHANNEL_ID,
-            mediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
-            metadata: {
-              botId: to,
-              roomId: td,
-              msgId: _id
-            }
-          });
-          this.api.logger.info(`[aeion] ✓ Message forwarded to OpenClaw successfully`);
-        } catch (err) {
-          this.api.logger.error(`[aeion] ✗ Error forwarding message: ${err.message}`);
-        } finally {
-          this.stopTyping(to, td, typingKey);
-        }
+        await this.handleInboundMessage(payload);
       });
 
       this.socket.on("disconnect", () => {
-        this.api.logger.warn("[aeion] Disconnected from aeion API server");
+        this.log?.warn("[aeion] Disconnected from aeion API server");
       });
 
-      this.api.logger.info("[aeion] ✓ Socket fully initialized and listening for messages");
+      this.log?.info("[aeion] ✓ Socket fully initialized and listening for messages");
+
+      // Wait for abort signal
+      await new Promise < void> ((resolve) => {
+        abortSignal.addEventListener("abort", () => {
+          this.log?.info("[aeion] Abort signal received, stopping...");
+          resolve();
+        }, { once: true });
+      });
+
     } catch (err) {
-      this.api.logger.error(`✗ [aeion] FATAL ERROR in start(): ${err.message}`);
-      this.api.logger.error(`[aeion] Stack: ${err.stack}`);
+      this.log?.error(`✗ [aeion] FATAL ERROR: ${err.message}`);
+      throw err;
+    } finally {
+      await this.stop();
+    }
+  }
+
+  async handleInboundMessage(payload) {
+    try {
+      const { to, td, by, m, b, _id } = payload;
+      this.log?.info(`[aeion] ✓ MESSAGE RECEIVED from ${by?.n} to bot ${to} in room ${td}`);
+      this.log?.info(`[aeion] Message text: "${m}"`);
+
+      let mediaPaths = [];
+      const serverUrl = "https://api.aeion.org/";
+
+      // Download attachments
+      if (b && b.length > 0) {
+        for (let i = 0; i < b.length; i++) {
+          const fileInfo = b[i];
+          const fileUrl = `${serverUrl}/api/msgo/att/${_id}/${i}/${fileInfo.n}`;
+
+          try {
+            this.log?.info(`[aeion] Downloading attachment: ${fileInfo.n}`);
+            const response = await fetch(fileUrl, {
+              headers: { 'Authorization': `Bearer ${this.account.apiKey}` }
+            });
+
+            if (!response.ok) {
+              throw new Error(`HTTP ${response.status} ${response.statusText}`);
+            }
+
+            const buffer = Buffer.from(await response.arrayBuffer());
+            const savedFile = await this.runtime.channel.media.saveMediaBuffer(buffer, fileInfo.t, "inbound");
+            mediaPaths.push(savedFile);
+            this.log?.info(`[aeion] ✓ Attachment saved: ${savedFile}`);
+          } catch (err) {
+            this.log?.error(`[aeion] Failed to download ${fileInfo.n}: ${err.message}`);
+          }
+        }
+      }
+
+      // Build context for agent
+      const contextPayload = {
+        Body: m,
+        BodyForAgent: m,
+        From: `aeion:${by?.n || by?.id || "unknown"}`,
+        To: `aeion:${to}`,
+        SessionKey: `${to}:${td}`,
+        ChatType: "direct",
+        ConversationLabel: `aeion room ${td}`,
+        SenderName: by?.n || "aeionUser",
+        SenderId: by?.id || "unknown",
+        Provider: "aeion",
+        Surface: "aeion",
+        MessageSid: _id,
+        Timestamp: Date.now(),
+        OriginatingChannel: "aeion",
+        OriginatingTo: `aeion:${to}`,
+        CommandAuthorized: true,
+        metadata: {
+          botId: to,
+          roomId: td,
+          msgId: _id
+        }
+      };
+
+      if (mediaPaths.length > 0) {
+        contextPayload.MediaPaths = mediaPaths;
+        contextPayload.NumMedia = mediaPaths.length;
+      }
+
+      const finalContext = this.runtime.channel.reply.finalizeInboundContext(contextPayload);
+
+      this.log?.info(`[aeion] Dispatching message to agent...`);
+
+      // Create dispatcher for replies
+      const { dispatcher, replyOptions, markDispatchIdle } = this.runtime.channel.reply.createReplyDispatcherWithTyping({
+        deliver: async (payload) => {
+          await this.sendMessage(payload, to, td);
+        },
+        onReplyStart: () => this.startTyping(to, td),
+        onError: (err, info) => {
+          this.log?.error(`[aeion] Dispatch error (${info.kind}): ${err.message}`);
+        },
+      });
+
+      try {
+        await this.runtime.channel.reply.dispatchReplyFromConfig({
+          ctx: finalContext,
+          cfg: this.runtime.cfg,
+          dispatcher,
+          replyOptions,
+        });
+      } finally {
+        markDispatchIdle();
+        this.stopTyping(to, td);
+      }
+
+      this.log?.info(`[aeion] ✓ Message handled successfully`);
+    } catch (err) {
+      this.log?.error(`[aeion] ✗ Error handling inbound message: ${err.message}`);
+    }
+  }
+
+  async sendMessage(payload, botId, roomId) {
+    try {
+      const text = (payload.text || "").trim();
+      if (!text && !payload.media) {
+        this.log?.info("[aeion] Skipping empty message");
+        return;
+      }
+
+      this.log?.info(`[aeion] Sending message to room ${botId}-${roomId}: "${text.substring(0, 50)}..."`);
+
+      const msgPayload = {
+        m: text || " ",
+        to: botId,
+        td: roomId,
+        atts: []
+      };
+
+      this.socket.emit("msg_send", msgPayload);
+      this.log?.info(`[aeion] ✓ Message sent`);
+    } catch (err) {
+      this.log?.error(`[aeion] ✗ Error sending message: ${err.message}`);
       throw err;
     }
   }
 
-  getTypingKey(botId, roomId) {
-    return `${botId || ""}:${roomId || ""}`;
-  }
-
-  emitTypingEvent(eventName, botId, roomId) {
+  startTyping(botId, roomId) {
     if (!this.socket) return;
     const payload = { to: botId };
     if (roomId) payload.td = roomId;
-    this.socket.emit(eventName, payload);
+    this.socket.emit("typing", payload);
   }
 
-  startTyping(botId, roomId) {
-    const key = this.getTypingKey(botId, roomId);
-    this.stopTyping(botId, roomId, key);
-    this.emitTypingEvent("typing", botId, roomId);
-    const timer = setInterval(() => {
-      this.emitTypingEvent("typing", botId, roomId);
-    }, 4000);
-    this.typingTimers.set(key, timer);
-  }
-
-  stopTyping(botId, roomId, key = this.getTypingKey(botId, roomId)) {
-    const timer = this.typingTimers.get(key);
-    if (timer) {
-      clearInterval(timer);
-      this.typingTimers.delete(key);
-    }
-    this.emitTypingEvent("typing_stop", botId, roomId);
-  }
-
-  async send(envelope) {
-    const { text, metadata, attachments } = envelope;
-    const { botId, roomId } = metadata || {};
-
-    if (!this.socket) {
-      this.api.logger.error("[aeion] Cannot send: socket not initialized");
-      return;
-    }
-
-    if (!roomId || !botId) {
-      this.api.logger.warn("[aeion] Cannot send: missing botId or roomId in metadata");
-      return;
-    }
-
-    this.api.logger.info(`[aeion] Sending response to room: ${botId}-${roomId}`);
-
-    const payload = {
-      m: text,
-      to: botId,
-      td: roomId,
-      atts: []
-    };
-
-    if (attachments?.length > 0) {
-      try {
-        payload.atts = await Promise.all(attachments.map(async (attr) => {
-          const buffer = await this.api.readMediaFile(attr.path);
-          return {
-            name: attr.name,
-            type: attr.mimeType,
-            size: attr.size,
-            data: buffer.toString('base64')
-          };
-        }));
-        this.api.logger.info(`[aeion] Sending ${attachments.length} attachment(s)`);
-      } catch (err) {
-        this.api.logger.error(`[aeion] Error processing attachments: ${err.message}`);
-      }
-    }
-
-    try {
-      this.socket.emit("msg_send", payload);
-      this.api.logger.info(`[aeion] ✓ Message sent: "${text}"`);
-    } catch (err) {
-      this.api.logger.error(`[aeion] ✗ Error sending message: ${err.message}`);
-    }
+  stopTyping(botId, roomId) {
+    if (!this.socket) return;
+    const payload = { to: botId };
+    if (roomId) payload.td = roomId;
+    this.socket.emit("typing_stop", payload);
   }
 
   async stop() {
-    this.api.logger.info("[aeion] Stopping channel...");
+    this.log?.info("[aeion] Stopping...");
     if (this.socket) {
-      for (const timer of this.typingTimers.values()) {
-        clearInterval(timer);
-      }
-      this.typingTimers.clear();
       this.socket.close();
-      this.api.logger.info("[aeion] ✓ Bridge stopped.");
-    } else {
-      this.api.logger.warn("[aeion] Socket was not initialized");
+      this.log?.info("[aeion] ✓ Socket closed");
     }
   }
 }
@@ -249,39 +257,45 @@ export const aeionPlugin = {
         dmPolicy: aeionCfg.dmSecurity || "allowlist",
       };
     },
+    isConfigured: (account) => !!account.apiKey,
+    describeAccount: (account) => ({
+      accountId: "default",
+      name: "aeion",
+      enabled: true,
+      configured: !!account.apiKey,
+    }),
   },
-  channels: {
-    [CHANNEL_ID]: {
-      create: async (account, api) => {
-        console.log("[aeion] channels.create() called");
-        api.logger.info("[aeion] ✓ Channel create called - instantiating");
-        const channel = new AeionChannel(account, api);
-        try {
-          api.logger.info("[aeion] Starting socket connection...");
-          await channel.start();
-          api.logger.info("[aeion] ✓ Channel fully initialized and connected");
-          return channel;
-        } catch (err) {
-          console.error("[aeion] Channel creation ERROR:", err.message);
-          api.logger.error(`[aeion] ✗ Channel creation failed: ${err.message}`);
-          throw err;
-        }
-      },
-      sendText: async ({ text, target, account, api, metadata, attachments }) => {
-        api.logger.info(`[aeion] sendText called: "${text}"`);
+  gateway: {
+    startAccount: async (ctx) => {
+      const account = ctx.account;
 
-        if (target && typeof target.send === 'function') {
-          await target.send({
-            text,
-            metadata,
-            attachments
-          });
-          return { ok: true, sent: true };
-        } else {
-          api.logger.error("[aeion] sendText: target channel not available");
-          return { ok: false, error: "Channel not available" };
-        }
-      },
-    }
+      if (!account.apiKey) {
+        ctx.log?.warn("[aeion] Not configured, skipping start");
+        return;
+      }
+
+      ctx.log?.info("[aeion] Starting gateway account...");
+      ctx.setStatus({ accountId: account.accountId || "default", running: true });
+
+      try {
+        const runtime = new AeionChannelRuntime(account, ctx.runtime, ctx.log);
+        await runtime.start(ctx.abortSignal);
+      } catch (err) {
+        ctx.log?.error(`[aeion] Gateway error: ${err.message}`);
+        ctx.setStatus({ accountId: account.accountId || "default", running: false, lastError: err.message });
+        throw err;
+      } finally {
+        ctx.setStatus({ accountId: account.accountId || "default", running: false });
+      }
+    },
+  },
+  status: {
+    defaultRuntime: {
+      accountId: "default",
+      running: false,
+      lastStartAt: null,
+      lastStopAt: null,
+      lastError: null,
+    },
   },
 };
