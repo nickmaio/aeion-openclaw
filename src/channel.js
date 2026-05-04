@@ -67,7 +67,7 @@ class AeionChannelRuntime {
       this.log?.info("[aeion] ✓ Socket fully initialized and listening for messages");
 
       // Wait for abort signal
-      await new Promise < void> ((resolve) => {
+      await new Promise((resolve) => {
         abortSignal.addEventListener("abort", () => {
           this.log?.info("[aeion] Abort signal received, stopping...");
           resolve();
