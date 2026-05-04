@@ -15,7 +15,7 @@ class AeionChannelRuntime {
   async start(abortSignal) {
     try {
       const { apiKey } = this.account;
-      const serverUrl = "https://api.aeion.org/";
+      const serverUrl = "https://api.aeion.org";
 
       this.log?.info(`[aeion] Starting connection with API key: ${apiKey ? apiKey.substring(0, 3) + "..." : "MISSING"}`);
 
@@ -24,9 +24,10 @@ class AeionChannelRuntime {
       }
 
       this.socket = io(serverUrl, {
-        auth: { token: 'Bearer ' + apiKey, agent: 'OpenClaw', platform: 'aeion' },
-        reconnection: true,
+        transports: ['websocket'],
+        auth: { token: 'bearer ' + apiKey, agent: 'OpenClaw', platform: 'aeion' },
         withCredentials: true,
+        reconnection: true,
         reconnectionAttempts: 10
       });
 
