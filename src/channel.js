@@ -167,7 +167,6 @@ class AeionChannelRuntime {
         contextPayload.NumMedia = mediaPaths.length;
       }
 
-      const core = getAeionRuntime();
       const finalContext = core.channel.reply.finalizeInboundContext(contextPayload);
 
       this.log?.info(`[aeion] Dispatching message to agent...`);
