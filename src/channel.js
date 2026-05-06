@@ -6,6 +6,7 @@ import { getAeionRuntime } from "./runtime.js";
 
 const CHANNEL_ID = "aeion";
 const AEION_SERVER_URL = "https://api.aeion.org";
+const DISCONNECT_GRACE_MS = 60_000;
 const activeRuntimes = new Map();
 
 function asString(value) {
@@ -19,6 +20,14 @@ function firstString(...values) {
     if (text) return text;
   }
   return "";
+}
+
+function safeJson(value) {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 }
 
 function normalizeAllowValue(value) {
@@ -195,6 +204,8 @@ class AeionChannelRuntime {
     this.log = log;
     this.statusSink = statusSink;
     this.socket = null;
+    this.disconnectTimer = null;
+    this.hasConnected = false;
   }
 
   async start(abortSignal) {
@@ -221,16 +232,28 @@ class AeionChannelRuntime {
 
         this.socket.on("connect", () => {
           clearTimeout(connectTimeout);
-          this.statusSink?.({ running: true, connected: true, lastError: null });
+          this.hasConnected = true;
+          this.clearDisconnectTimer();
+          this.statusSink?.({
+            running: true,
+            connected: true,
+            reconnecting: false,
+            disconnectReason: null,
+            lastError: null,
+          });
           this.log?.info("[aeion] Connected to aeion API server");
           resolve();
         });
 
         this.socket.on("connect_error", (err) => {
           clearTimeout(connectTimeout);
-          this.statusSink?.({ connected: false, lastError: err.message });
+          if (this.hasConnected) {
+            this.statusSink?.({ reconnecting: true, lastError: err.message });
+          } else {
+            this.statusSink?.({ connected: false, reconnecting: false, lastError: err.message });
+          }
           this.log?.error(`[aeion] Connection Error: ${err.message}`);
-          reject(err);
+          if (!this.hasConnected) reject(err);
         });
 
         this.socket.on("error", (err) => {
@@ -246,9 +269,39 @@ class AeionChannelRuntime {
         await this.handleInboundMessage(payload);
       });
 
-      this.socket.on("disconnect", () => {
-        this.statusSink?.({ connected: false });
-        this.log?.warn("[aeion] Disconnected from aeion API server");
+      this.socket.on("disconnect", (reason, details) => {
+        this.handleDisconnect(reason, details);
+      });
+
+      this.socket.io.on("reconnect_attempt", (attempt) => {
+        this.log?.info(`[aeion] Reconnect attempt ${attempt}`);
+      });
+
+      this.socket.io.on("reconnect", (attempt) => {
+        this.clearDisconnectTimer();
+        this.statusSink?.({
+          running: true,
+          connected: true,
+          reconnecting: false,
+          disconnectReason: null,
+          lastError: null,
+        });
+        this.log?.info(`[aeion] Reconnected after ${attempt} attempt(s)`);
+      });
+
+      this.socket.io.on("reconnect_error", (err) => {
+        this.statusSink?.({ reconnecting: true, lastError: err.message });
+        this.log?.warn(`[aeion] Reconnect error: ${err.message}`);
+      });
+
+      this.socket.io.on("reconnect_failed", () => {
+        this.clearDisconnectTimer();
+        this.statusSink?.({
+          connected: false,
+          reconnecting: false,
+          lastError: "Socket.IO reconnect failed",
+        });
+        this.log?.error("[aeion] Reconnect failed");
       });
 
       this.log?.info("[aeion] Socket fully initialized and listening for messages");
@@ -495,6 +548,35 @@ class AeionChannelRuntime {
     return null;
   }
 
+  handleDisconnect(reason, details) {
+    const detailText = details ? ` ${safeJson(details)}` : "";
+    this.log?.warn(`[aeion] Disconnected from aeion API server: ${reason || "unknown"}${detailText}`);
+
+    this.statusSink?.({
+      reconnecting: true,
+      disconnectReason: reason || "unknown",
+      lastDisconnectAt: new Date().toISOString(),
+    });
+
+    this.clearDisconnectTimer();
+    this.disconnectTimer = setTimeout(() => {
+      if (this.socket?.connected) return;
+      this.statusSink?.({
+        connected: false,
+        reconnecting: false,
+        lastError: `Disconnected for ${Math.round(DISCONNECT_GRACE_MS / 1000)}s: ${reason || "unknown"}`,
+      });
+      this.log?.warn("[aeion] Disconnect grace period elapsed; reporting disconnected");
+    }, DISCONNECT_GRACE_MS);
+  }
+
+  clearDisconnectTimer() {
+    if (this.disconnectTimer) {
+      clearTimeout(this.disconnectTimer);
+      this.disconnectTimer = null;
+    }
+  }
+
   async buildOutboundAttachments(mediaSpecs) {
     const attachments = [];
     for (const media of mediaSpecs) {
@@ -540,6 +622,7 @@ class AeionChannelRuntime {
 
   async stop() {
     this.log?.info("[aeion] Stopping...");
+    this.clearDisconnectTimer();
     if (this.socket) {
       this.socket.close();
       this.socket = null;
@@ -639,7 +722,7 @@ export const aeionPlugin = {
 
       if (!account.apiKey) {
         ctx.log?.warn("[aeion] Not configured, skipping start");
-        statusSink({ running: false, connected: false, lastError: "aeion: apiKey is required" });
+        statusSink({ running: false, connected: false, reconnecting: false, lastError: "aeion: apiKey is required" });
         return;
       }
 
@@ -647,6 +730,7 @@ export const aeionPlugin = {
       statusSink({
         running: true,
         connected: false,
+        reconnecting: false,
         lastStartAt: new Date().toISOString(),
         lastError: null,
       });
@@ -659,7 +743,7 @@ export const aeionPlugin = {
       } catch (err) {
         ctx.log?.error(`[aeion] Gateway error: ${err.message}`);
         if (!runtime || activeRuntimes.get(accountId) === runtime) {
-          statusSink({ running: false, connected: false, lastError: err.message });
+          statusSink({ running: false, connected: false, reconnecting: false, lastError: err.message });
         }
         throw err;
       } finally {
@@ -667,6 +751,7 @@ export const aeionPlugin = {
           statusSink({
             running: false,
             connected: false,
+            reconnecting: false,
             lastStopAt: new Date().toISOString(),
           });
           activeRuntimes.delete(accountId);
@@ -679,6 +764,9 @@ export const aeionPlugin = {
       accountId: "default",
       running: false,
       connected: false,
+      reconnecting: false,
+      lastDisconnectAt: null,
+      disconnectReason: null,
       lastStartAt: null,
       lastStopAt: null,
       lastError: null,
@@ -691,6 +779,9 @@ export const aeionPlugin = {
       dmPolicy: account.dmPolicy,
       running: runtime?.running ?? false,
       connected: runtime?.connected ?? false,
+      reconnecting: runtime?.reconnecting ?? false,
+      lastDisconnectAt: runtime?.lastDisconnectAt ?? null,
+      disconnectReason: runtime?.disconnectReason ?? null,
       lastStartAt: runtime?.lastStartAt ?? null,
       lastStopAt: runtime?.lastStopAt ?? null,
       lastError: runtime?.lastError ?? null,
