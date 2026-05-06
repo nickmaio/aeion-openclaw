@@ -25,6 +25,41 @@ function normalizeAllowValue(value) {
   return asString(value).trim().replace(/^aeion:/i, "").toLowerCase();
 }
 
+function isObjectIdHex(value) {
+  return /^[a-f0-9]{24}$/i.test(asString(value).trim());
+}
+
+function base64urlToHex(value) {
+  const normalized = asString(value).trim();
+  if (!normalized || isObjectIdHex(normalized)) return normalized;
+
+  try {
+    const base64 = normalized.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
+    const hex = Buffer.from(padded, "base64").toString("hex");
+    return isObjectIdHex(hex) ? hex : normalized;
+  } catch {
+    return normalized;
+  }
+}
+
+function hexToBase64url(value) {
+  const normalized = asString(value).trim();
+  if (!isObjectIdHex(normalized)) return normalized;
+  return Buffer.from(normalized, "hex").toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function toMongoId(value) {
+  return base64urlToHex(value);
+}
+
+function toSocketRoomId(value) {
+  return hexToBase64url(value);
+}
+
 function normalizeAeionSender(by) {
   if (!by) {
     return { id: "unknown", name: "aeionUser", raw: by };
@@ -427,10 +462,13 @@ class AeionChannelRuntime {
 
       const msgPayload = {
         m: text || " ",
-        to: botId,
-        td: roomId || undefined,
+        to: toMongoId(botId),
+        td: roomId ? toMongoId(roomId) : undefined,
         atts: attachments,
       };
+      if (msgPayload.td && msgPayload.td !== roomId) {
+        this.log?.info(`[aeion] Converted room id for msg_send: ${roomId} -> ${msgPayload.td}`);
+      }
 
       socket.emit("msg_send", msgPayload);
       this.log?.info("[aeion] Message sent");
@@ -488,7 +526,7 @@ class AeionChannelRuntime {
     const socket = this.getConnectedSocket();
     if (!socket) return;
     const payload = { to: botId };
-    if (roomId) payload.td = roomId;
+    if (roomId) payload.td = toSocketRoomId(roomId);
     socket.emit("typing", payload);
   }
 
@@ -496,7 +534,7 @@ class AeionChannelRuntime {
     const socket = this.getConnectedSocket();
     if (!socket) return;
     const payload = { to: botId };
-    if (roomId) payload.td = roomId;
+    if (roomId) payload.td = toSocketRoomId(roomId);
     socket.emit("typing_stop", payload);
   }
 
