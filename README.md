@@ -1,6 +1,6 @@
 # aeion OpenClaw bridge
 
-Connect OpenClaw to the aeion platform at <https://aeion.org/>. This native OpenClaw channel plugin lets you chat with your OpenClaw agent from aeion UI.
+Connect OpenClaw to the aeion platform at <https://aeion.org/>. This native OpenClaw channel plugin lets you chat with your OpenClaw agent from aeion apps.
 
 ## Prerequisites
 
@@ -8,7 +8,7 @@ Connect OpenClaw to the aeion platform at <https://aeion.org/>. This native Open
 - Node.js 18 or newer.
 - OpenClaw 2026.3.23-2 or newer.
 
-You can get the API key when you create or attach your AI agent in aeion.
+You can get the API key when you create a screen for your AI agent in aeion.
 
 ## Installation
 
@@ -18,21 +18,10 @@ Install dependencies from a local checkout:
 git clone https://github.com/nickmaio/aeion-openclaw.git
 cd aeion-openclaw
 npm install
-```
-
-For local development, install it as a linked plugin so OpenClaw uses this checkout directly:
-
-```bash
-openclaw plugins install . --link
-```
-
-For a copied local install, use:
-
-```bash
 openclaw plugins install .
 ```
 
-If you are replacing an existing copied install, add `--force`.
+If you are replacing an existing plugin, add `--force`.
 
 ## Configuration
 
@@ -73,6 +62,9 @@ Optional direct-message controls:
 
 `dmSecurity` can be `allowlist`, `open`, or `disabled`.
 
+When `dmSecurity` is `allowlist`, inbound messages are accepted only when
+`allowFrom` contains the sender id/name or the aeion agent room id.
+
 ## Verify
 
 Check that OpenClaw can load the plugin:
@@ -104,8 +96,5 @@ Verify your config structure matches the Configuration section above:
 **Warning: "plugins.allow is empty; discovered non-bundled plugins may auto-load"**
 
 This is a security notice. Add `plugins.allow` to your config to explicitly trust the plugin (see Configuration section above). Include `"aeion-openclaw"` in the `plugins.allow` array.
-
-Built by following the OpenClaw plugin development guide:
-<https://docs.openclaw.ai/plugins/sdk-channel-plugins>
 
 MIT (c) Nick Maio
