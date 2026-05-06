@@ -1,12 +1,9 @@
-import { readFile, stat } from "node:fs/promises";
-import { basename } from "node:path";
 import { fetch } from "undici";
 import { io } from "socket.io-client";
 import { getAeionRuntime } from "./runtime.js";
 
 const CHANNEL_ID = "aeion";
 const AEION_SERVER_URL = "https://api.aeion.org";
-const DISCONNECT_GRACE_MS = 60_000;
 const activeRuntimes = new Map();
 
 function asString(value) {
@@ -146,28 +143,6 @@ function getAllowCandidates(payload) {
   ].map(normalizeAllowValue).filter(Boolean);
 }
 
-function inferMimeType(filePath, fallback = "application/octet-stream") {
-  const ext = basename(filePath).toLowerCase().split(".").pop();
-  const mimeTypes = {
-    jpg: "image/jpeg",
-    jpeg: "image/jpeg",
-    png: "image/png",
-    gif: "image/gif",
-    webp: "image/webp",
-    pdf: "application/pdf",
-    txt: "text/plain",
-    md: "text/markdown",
-    csv: "text/csv",
-    json: "application/json",
-    mp3: "audio/mpeg",
-    m4a: "audio/mp4",
-    wav: "audio/wav",
-    mp4: "video/mp4",
-    mov: "video/quicktime",
-  };
-  return mimeTypes[ext] || fallback;
-}
-
 function coerceOutboundMedia(payload) {
   const values = [
     payload?.media,
@@ -204,8 +179,12 @@ class AeionChannelRuntime {
     this.log = log;
     this.statusSink = statusSink;
     this.socket = null;
-    this.disconnectTimer = null;
+    this.manualReconnectTimer = null;
+    this.manualReconnectAttempts = 0;
+    this.resolveStop = null;
+    this.stopping = false;
     this.hasConnected = false;
+    this.activeRuns = 0;
   }
 
   async start(abortSignal) {
@@ -218,11 +197,12 @@ class AeionChannelRuntime {
       }
 
       this.socket = io(AEION_SERVER_URL, {
-        transports: ["websocket"],
+        transports: ["websocket", "polling"],
         auth: { token: "bearer " + apiKey, agent: "OpenClaw", platform: "aeion" },
         withCredentials: true,
         reconnection: true,
-        reconnectionAttempts: 10,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 30000,
       });
 
       await new Promise((resolve, reject) => {
@@ -233,12 +213,14 @@ class AeionChannelRuntime {
         this.socket.on("connect", () => {
           clearTimeout(connectTimeout);
           this.hasConnected = true;
-          this.clearDisconnectTimer();
+          this.manualReconnectAttempts = 0;
+          this.clearManualReconnectTimer();
           this.statusSink?.({
             running: true,
             connected: true,
             reconnecting: false,
             disconnectReason: null,
+            lastTransportActivityAt: Date.now(),
             lastError: null,
           });
           this.log?.info("[aeion] Connected to aeion API server");
@@ -248,7 +230,11 @@ class AeionChannelRuntime {
         this.socket.on("connect_error", (err) => {
           clearTimeout(connectTimeout);
           if (this.hasConnected) {
-            this.statusSink?.({ reconnecting: true, lastError: err.message });
+            this.statusSink?.({
+              reconnecting: true,
+              lastTransportActivityAt: Date.now(),
+              lastError: err.message,
+            });
           } else {
             this.statusSink?.({ connected: false, reconnecting: false, lastError: err.message });
           }
@@ -278,36 +264,52 @@ class AeionChannelRuntime {
       });
 
       this.socket.io.on("reconnect", (attempt) => {
-        this.clearDisconnectTimer();
+        this.manualReconnectAttempts = 0;
+        this.clearManualReconnectTimer();
         this.statusSink?.({
           running: true,
           connected: true,
           reconnecting: false,
           disconnectReason: null,
+          lastTransportActivityAt: Date.now(),
           lastError: null,
         });
         this.log?.info(`[aeion] Reconnected after ${attempt} attempt(s)`);
       });
 
       this.socket.io.on("reconnect_error", (err) => {
-        this.statusSink?.({ reconnecting: true, lastError: err.message });
+        this.statusSink?.({
+          reconnecting: true,
+          lastTransportActivityAt: Date.now(),
+          lastError: err.message,
+        });
         this.log?.warn(`[aeion] Reconnect error: ${err.message}`);
       });
 
       this.socket.io.on("reconnect_failed", () => {
-        this.clearDisconnectTimer();
+        this.clearManualReconnectTimer();
         this.statusSink?.({
           connected: false,
           reconnecting: false,
+          lastTransportActivityAt: Date.now(),
           lastError: "Socket.IO reconnect failed",
         });
         this.log?.error("[aeion] Reconnect failed");
+        this.resolveStop?.();
       });
 
       this.log?.info("[aeion] Socket fully initialized and listening for messages");
 
       await new Promise((resolve) => {
+        this.resolveStop = resolve;
+        if (abortSignal.aborted) {
+          this.stopping = true;
+          resolve();
+          return;
+        }
+
         abortSignal.addEventListener("abort", () => {
+          this.stopping = true;
           this.log?.info("[aeion] Abort signal received, stopping...");
           resolve();
         }, { once: true });
@@ -322,6 +324,7 @@ class AeionChannelRuntime {
 
   async handleInboundMessage(payload) {
     try {
+      this.statusSink?.({ lastInboundAt: Date.now(), lastTransportActivityAt: Date.now() });
       const sender = normalizeAeionSender(payload?.by);
       const route = normalizeAeionRoute(payload);
       if (!this.isInboundAllowed(payload)) {
@@ -381,6 +384,7 @@ class AeionChannelRuntime {
       });
 
       try {
+        this.markRunActivity(1);
         await core.channel.reply.dispatchReplyFromConfig({
           ctx: finalContext,
           cfg: this.cfg,
@@ -388,6 +392,7 @@ class AeionChannelRuntime {
           replyOptions,
         });
       } finally {
+        this.markRunActivity(-1);
         markDispatchIdle();
         this.stopTyping(route.botId, route.roomId);
       }
@@ -503,8 +508,11 @@ class AeionChannelRuntime {
       const mediaSpecs = coerceOutboundMedia(payload);
       const attachments = await this.buildOutboundAttachments(mediaSpecs);
       if (!text && attachments.length === 0) {
+        if (mediaSpecs.length > 0) {
+          throw new Error("aeion outbound media attachments require a safe media loader");
+        }
         this.log?.info("[aeion] Skipping empty message");
-        return;
+        return { channel: CHANNEL_ID, ok: true, skipped: true };
       }
 
       this.log?.info(`[aeion] Sending message to room ${botId}-${roomId || "main"}: "${text.substring(0, 50)}..."`);
@@ -548,60 +556,61 @@ class AeionChannelRuntime {
     return null;
   }
 
+  markRunActivity(delta) {
+    this.activeRuns = Math.max(0, this.activeRuns + delta);
+    this.statusSink?.({
+      busy: this.activeRuns > 0,
+      activeRuns: this.activeRuns,
+      lastRunActivityAt: Date.now(),
+    });
+  }
+
   handleDisconnect(reason, details) {
     const detailText = details ? ` ${safeJson(details)}` : "";
     this.log?.warn(`[aeion] Disconnected from aeion API server: ${reason || "unknown"}${detailText}`);
 
+    if (this.stopping) return;
+
     this.statusSink?.({
+      running: true,
       reconnecting: true,
       disconnectReason: reason || "unknown",
-      lastDisconnectAt: new Date().toISOString(),
+      lastDisconnectAt: Date.now(),
+      lastTransportActivityAt: Date.now(),
     });
 
-    this.clearDisconnectTimer();
-    this.disconnectTimer = setTimeout(() => {
-      if (this.socket?.connected) return;
-      this.statusSink?.({
-        connected: false,
-        reconnecting: false,
-        lastError: `Disconnected for ${Math.round(DISCONNECT_GRACE_MS / 1000)}s: ${reason || "unknown"}`,
-      });
-      this.log?.warn("[aeion] Disconnect grace period elapsed; reporting disconnected");
-    }, DISCONNECT_GRACE_MS);
+    if (reason === "io server disconnect") {
+      this.scheduleManualReconnect();
+    }
   }
 
-  clearDisconnectTimer() {
-    if (this.disconnectTimer) {
-      clearTimeout(this.disconnectTimer);
-      this.disconnectTimer = null;
+  scheduleManualReconnect() {
+    if (!this.socket || this.socket.connected || this.manualReconnectTimer) return;
+
+    this.manualReconnectAttempts += 1;
+    const delayMs = Math.min(30_000, 1000 * (2 ** Math.min(this.manualReconnectAttempts - 1, 5)));
+    this.log?.warn(`[aeion] Server disconnected the socket; reconnecting manually in ${Math.round(delayMs / 1000)}s`);
+
+    this.manualReconnectTimer = setTimeout(() => {
+      this.manualReconnectTimer = null;
+      if (this.stopping || !this.socket || this.socket.connected) return;
+      this.log?.info("[aeion] Manual Socket.IO reconnect attempt");
+      this.socket.connect();
+    }, delayMs);
+  }
+
+  clearManualReconnectTimer() {
+    if (this.manualReconnectTimer) {
+      clearTimeout(this.manualReconnectTimer);
+      this.manualReconnectTimer = null;
     }
   }
 
   async buildOutboundAttachments(mediaSpecs) {
-    const attachments = [];
     for (const media of mediaSpecs) {
-      try {
-        if (!media.path || /^https?:\/\//i.test(media.path)) {
-          this.log?.warn(`[aeion] Skipping unsupported outbound media path: ${media.path || "missing"}`);
-          continue;
-        }
-        const buffer = await readFile(media.path);
-        const info = await stat(media.path);
-        const filename = media.filename || basename(media.path);
-        const mimeType = media.mimeType || inferMimeType(media.path);
-        attachments.push({
-          name: filename,
-          originalFilename: filename,
-          type: mimeType,
-          mimetype: mimeType,
-          size: info.size || buffer.byteLength,
-          data: buffer.toString("base64"),
-        });
-      } catch (err) {
-        this.log?.error(`[aeion] Failed to attach outbound media ${media.path}: ${err.message}`);
-      }
+      this.log?.warn(`[aeion] Skipping outbound media attachment; safe outbound media loading is not available yet: ${media.path || "missing"}`);
     }
-    return attachments;
+    return [];
   }
 
   startTyping(botId, roomId) {
@@ -622,7 +631,10 @@ class AeionChannelRuntime {
 
   async stop() {
     this.log?.info("[aeion] Stopping...");
-    this.clearDisconnectTimer();
+    this.stopping = true;
+    this.resolveStop?.();
+    this.resolveStop = null;
+    this.clearManualReconnectTimer();
     if (this.socket) {
       this.socket.close();
       this.socket = null;
@@ -731,7 +743,7 @@ export const aeionPlugin = {
         running: true,
         connected: false,
         reconnecting: false,
-        lastStartAt: new Date().toISOString(),
+        lastStartAt: Date.now(),
         lastError: null,
       });
 
@@ -752,7 +764,7 @@ export const aeionPlugin = {
             running: false,
             connected: false,
             reconnecting: false,
-            lastStopAt: new Date().toISOString(),
+            lastStopAt: Date.now(),
           });
           activeRuntimes.delete(accountId);
         }
@@ -770,6 +782,10 @@ export const aeionPlugin = {
       lastStartAt: null,
       lastStopAt: null,
       lastError: null,
+      busy: false,
+      activeRuns: 0,
+      lastRunActivityAt: null,
+      lastTransportActivityAt: null,
     },
     buildAccountSnapshot: ({ account, runtime }) => ({
       accountId: account.accountId || "default",
@@ -785,6 +801,10 @@ export const aeionPlugin = {
       lastStartAt: runtime?.lastStartAt ?? null,
       lastStopAt: runtime?.lastStopAt ?? null,
       lastError: runtime?.lastError ?? null,
+      busy: runtime?.busy ?? false,
+      activeRuns: runtime?.activeRuns ?? 0,
+      lastRunActivityAt: runtime?.lastRunActivityAt ?? null,
+      lastTransportActivityAt: runtime?.lastTransportActivityAt ?? null,
     }),
   },
 };
