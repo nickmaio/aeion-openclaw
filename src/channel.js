@@ -5,6 +5,10 @@ import { getAeionRuntime } from "./runtime.js";
 const CHANNEL_ID = "aeion";
 const AEION_SERVER_URL = "https://api.aeion.org";
 const TYPING_REFRESH_MS = 4000;
+const INBOUND_DEDUPE_TTL_MS = 10 * 60 * 1000;
+const INBOUND_DEDUPE_MAX = 1000;
+const OUTBOUND_ECHO_TTL_MS = 2 * 60 * 1000;
+const OUTBOUND_ECHO_MAX = 500;
 const activeRuntimes = new Map();
 
 function asString(value) {
@@ -144,6 +148,26 @@ function getAllowCandidates(payload) {
   ].map(normalizeAllowValue).filter(Boolean);
 }
 
+function getInboundMessageKey(payload, sender, route) {
+  const messageId = firstString(payload?._id, payload?.id, payload?.messageId, payload?.message_id);
+  if (messageId) return `id:${messageId}`;
+
+  const createdAt = firstString(payload?.ts, payload?.t, payload?.createdAt, payload?.created_at);
+  const body = asString(payload?.m);
+  return `fallback:${route.sessionKey}:${sender.id}:${createdAt}:${body}`;
+}
+
+function getMessageBody(payload) {
+  return asString(payload?.m || payload?.text || payload?.body).trim();
+}
+
+function getOutboundEchoKey(routeOrTarget, text) {
+  const botId = asString(routeOrTarget?.botId);
+  const roomId = asString(routeOrTarget?.roomId);
+  const sessionKey = roomId ? `${botId}:${roomId}` : botId;
+  return `${sessionKey}:${asString(text).trim()}`;
+}
+
 function coerceOutboundMedia(payload) {
   const values = [
     payload?.media,
@@ -187,6 +211,8 @@ class AeionChannelRuntime {
     this.hasConnected = false;
     this.activeRuns = 0;
     this.typingIntervals = new Map();
+    this.recentInboundMessages = new Map();
+    this.recentOutboundEchoes = new Map();
   }
 
   async start(abortSignal) {
@@ -329,8 +355,23 @@ class AeionChannelRuntime {
       this.statusSink?.({ lastInboundAt: Date.now(), lastTransportActivityAt: Date.now() });
       const sender = normalizeAeionSender(payload?.by);
       const route = normalizeAeionRoute(payload);
+      if (this.isOwnMessage(sender, route)) {
+        this.log?.info("[aeion] Ignoring own message");
+        return;
+      }
+
+      if (this.isOutboundEcho(payload, route)) {
+        this.log?.info("[aeion] Ignoring echoed outbound message");
+        return;
+      }
+
       if (!this.isInboundAllowed(payload)) {
         this.log?.warn("[aeion] Inbound message blocked by dmSecurity policy");
+        return;
+      }
+
+      if (this.isDuplicateInbound(payload, sender, route)) {
+        this.log?.info("[aeion] Ignoring duplicate inbound message");
         return;
       }
 
@@ -419,6 +460,76 @@ class AeionChannelRuntime {
     if (allowed.size === 0) return false;
 
     return getAllowCandidates(payload).some((candidate) => allowed.has(candidate));
+  }
+
+  isOwnMessage(sender, route) {
+    const senderId = normalizeAllowValue(sender?.id);
+    if (!senderId) return false;
+
+    const ownIds = [
+      this.account.accountId,
+      this.account.botId,
+      route.botId,
+      this.socket?.id,
+    ].map(normalizeAllowValue).filter(Boolean);
+
+    return ownIds.includes(senderId);
+  }
+
+  isDuplicateInbound(payload, sender, route) {
+    const now = Date.now();
+    this.pruneInboundDedupe(now);
+
+    const key = getInboundMessageKey(payload, sender, route);
+    if (this.recentInboundMessages.has(key)) return true;
+
+    this.recentInboundMessages.set(key, now);
+    return false;
+  }
+
+  isOutboundEcho(payload, route) {
+    const now = Date.now();
+    this.pruneOutboundEchoes(now);
+
+    const key = getOutboundEchoKey(route, getMessageBody(payload));
+    if (!this.recentOutboundEchoes.has(key)) return false;
+
+    this.recentOutboundEchoes.delete(key);
+    return true;
+  }
+
+  pruneInboundDedupe(now = Date.now()) {
+    for (const [key, seenAt] of this.recentInboundMessages) {
+      if (now - seenAt > INBOUND_DEDUPE_TTL_MS) {
+        this.recentInboundMessages.delete(key);
+      }
+    }
+
+    while (this.recentInboundMessages.size > INBOUND_DEDUPE_MAX) {
+      const oldestKey = this.recentInboundMessages.keys().next().value;
+      if (!oldestKey) break;
+      this.recentInboundMessages.delete(oldestKey);
+    }
+  }
+
+  rememberOutboundEcho(botId, roomId, text) {
+    const now = Date.now();
+    this.pruneOutboundEchoes(now);
+    this.recentOutboundEchoes.set(getOutboundEchoKey({ botId, roomId }, text), now);
+  }
+
+  pruneOutboundEchoes(now = Date.now()) {
+    for (const [key, seenAt] of this.recentOutboundEchoes) {
+      if (now - seenAt > OUTBOUND_ECHO_TTL_MS) {
+        this.recentOutboundEchoes.delete(key);
+      }
+    }
+
+    while (this.recentOutboundEchoes.size > OUTBOUND_ECHO_MAX) {
+      const oldestKey = this.recentOutboundEchoes.keys().next().value;
+      if (!oldestKey) break;
+      this.recentOutboundEchoes.delete(oldestKey);
+    }
   }
 
   async resolveInboundMedia(core, payload) {
@@ -533,6 +644,7 @@ class AeionChannelRuntime {
         this.log?.info("[aeion] Converted room id for msg_send");
       }
 
+      this.rememberOutboundEcho(botId, roomId, msgPayload.m);
       socket.emit("msg_send", msgPayload);
       this.log?.info("[aeion] Message sent");
       return {
@@ -700,6 +812,7 @@ export const aeionPlugin = {
       return {
         accountId: id || "default",
         apiKey: aeionCfg.apiKey || aeionCfg.token,
+        botId: aeionCfg.botId || aeionCfg.screenId || aeionCfg.agentId,
         allowFrom: aeionCfg.allowFrom || [],
         dmPolicy: aeionCfg.dmSecurity || "allowlist",
       };
