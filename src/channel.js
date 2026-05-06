@@ -330,12 +330,11 @@ class AeionChannelRuntime {
       const sender = normalizeAeionSender(payload?.by);
       const route = normalizeAeionRoute(payload);
       if (!this.isInboundAllowed(payload)) {
-        this.log?.warn(`[aeion] Inbound message blocked by dmSecurity policy from ${sender.id} in room ${route.targetId || "unknown"}`);
+        this.log?.warn("[aeion] Inbound message blocked by dmSecurity policy");
         return;
       }
 
-      this.log?.info(`[aeion] Message received from ${sender.name} to bot ${route.botId} in room ${route.roomId || "main"}`);
-      this.log?.info(`[aeion] Message text: "${payload?.m || ""}"`);
+      this.log?.info("[aeion] Inbound message received");
 
       const core = getAeionRuntime();
       const inboundMedia = await this.resolveInboundMedia(core, payload);
@@ -434,7 +433,7 @@ class AeionChannelRuntime {
       const fileUrl = `${AEION_SERVER_URL}/api/msgo/att/${payload?._id}/${i}/${encodeURIComponent(filename)}`;
 
       try {
-        this.log?.info(`[aeion] Downloading attachment: ${filename}`);
+        this.log?.info("[aeion] Downloading inbound attachment");
         const response = await fetch(fileUrl, {
           headers: { Authorization: `Bearer ${this.account.apiKey}` },
         });
@@ -456,9 +455,9 @@ class AeionChannelRuntime {
           mimeType,
           size: Number(fileInfo.s || fileInfo.size || buffer.byteLength),
         });
-        this.log?.info(`[aeion] Attachment saved: ${saved}`);
+        this.log?.info("[aeion] Inbound attachment saved");
       } catch (err) {
-        this.log?.error(`[aeion] Failed to download ${filename}: ${err.message}`);
+        this.log?.error(`[aeion] Failed to download inbound attachment: ${err.message}`);
       }
     }
 
@@ -518,7 +517,7 @@ class AeionChannelRuntime {
         return { channel: CHANNEL_ID, ok: true, skipped: true };
       }
 
-      this.log?.info(`[aeion] Sending message to room ${botId}-${roomId || "main"}: "${text.substring(0, 50)}..."`);
+      this.log?.info("[aeion] Sending outbound message");
       const socket = this.getConnectedSocket();
       if (!socket) {
         throw new Error("aeion gateway is not connected");
@@ -531,7 +530,7 @@ class AeionChannelRuntime {
         atts: attachments,
       };
       if (msgPayload.td && msgPayload.td !== roomId) {
-        this.log?.info(`[aeion] Converted room id for msg_send: ${roomId} -> ${msgPayload.td}`);
+        this.log?.info("[aeion] Converted room id for msg_send");
       }
 
       socket.emit("msg_send", msgPayload);
@@ -611,7 +610,7 @@ class AeionChannelRuntime {
 
   async buildOutboundAttachments(mediaSpecs) {
     for (const media of mediaSpecs) {
-      this.log?.warn(`[aeion] Skipping outbound media attachment; safe outbound media loading is not available yet: ${media.path || "missing"}`);
+      this.log?.warn("[aeion] Skipping outbound media attachment; safe outbound media loading is not available yet");
     }
     return [];
   }
