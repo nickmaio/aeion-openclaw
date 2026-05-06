@@ -4,6 +4,7 @@ import { getAeionRuntime } from "./runtime.js";
 
 const CHANNEL_ID = "aeion";
 const AEION_SERVER_URL = "https://api.aeion.org";
+const TYPING_REFRESH_MS = 4000;
 const activeRuntimes = new Map();
 
 function asString(value) {
@@ -185,6 +186,7 @@ class AeionChannelRuntime {
     this.stopping = false;
     this.hasConnected = false;
     this.activeRuns = 0;
+    this.typingIntervals = new Map();
   }
 
   async start(abortSignal) {
@@ -385,6 +387,7 @@ class AeionChannelRuntime {
 
       try {
         this.markRunActivity(1);
+        this.startTyping(route.botId, route.roomId);
         await core.channel.reply.dispatchReplyFromConfig({
           ctx: finalContext,
           cfg: this.cfg,
@@ -614,19 +617,46 @@ class AeionChannelRuntime {
   }
 
   startTyping(botId, roomId) {
-    const socket = this.getConnectedSocket();
-    if (!socket) return;
-    const payload = { to: botId };
-    if (roomId) payload.td = toSocketRoomId(roomId);
-    socket.emit("typing", payload);
+    this.emitTyping("typing", botId, roomId);
+    const key = this.typingKey(botId, roomId);
+    if (this.typingIntervals.has(key)) return;
+
+    const interval = setInterval(() => {
+      this.emitTyping("typing", botId, roomId);
+    }, TYPING_REFRESH_MS);
+    if (typeof interval === "object" && "unref" in interval) interval.unref();
+    this.typingIntervals.set(key, interval);
   }
 
   stopTyping(botId, roomId) {
+    const key = this.typingKey(botId, roomId);
+    const interval = this.typingIntervals.get(key);
+    if (interval) {
+      clearInterval(interval);
+      this.typingIntervals.delete(key);
+    }
+    this.emitTyping("typing_stop", botId, roomId);
+  }
+
+  emitTyping(eventName, botId, roomId) {
     const socket = this.getConnectedSocket();
-    if (!socket) return;
+    if (!socket) return false;
     const payload = { to: botId };
     if (roomId) payload.td = toSocketRoomId(roomId);
-    socket.emit("typing_stop", payload);
+    socket.emit(eventName, payload);
+    this.statusSink?.({ lastTransportActivityAt: Date.now() });
+    return true;
+  }
+
+  typingKey(botId, roomId) {
+    return `${botId || "unknown"}:${roomId || "main"}`;
+  }
+
+  stopAllTyping() {
+    for (const interval of this.typingIntervals.values()) {
+      clearInterval(interval);
+    }
+    this.typingIntervals.clear();
   }
 
   async stop() {
@@ -635,6 +665,7 @@ class AeionChannelRuntime {
     this.resolveStop?.();
     this.resolveStop = null;
     this.clearManualReconnectTimer();
+    this.stopAllTyping();
     if (this.socket) {
       this.socket.close();
       this.socket = null;
