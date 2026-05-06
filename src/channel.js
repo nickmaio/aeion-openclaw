@@ -280,12 +280,14 @@ class AeionChannelRuntime {
       const finalContext = core.channel.reply.finalizeInboundContext(contextPayload);
       this.log?.info("[aeion] Dispatching message to agent...");
 
+      let dispatchFailed = false;
       const { dispatcher, replyOptions, markDispatchIdle } = core.channel.reply.createReplyDispatcherWithTyping({
         deliver: async (replyPayload) => {
           await this.sendMessage(replyPayload, route.botId, route.roomId);
         },
         onReplyStart: () => this.startTyping(route.botId, route.roomId),
         onError: (err, info) => {
+          dispatchFailed = true;
           this.log?.error(`[aeion] Dispatch error (${info.kind}): ${err.message}`);
         },
       });
@@ -302,7 +304,11 @@ class AeionChannelRuntime {
         this.stopTyping(route.botId, route.roomId);
       }
 
-      this.log?.info("[aeion] Message handled successfully");
+      if (dispatchFailed) {
+        this.log?.warn("[aeion] Message processing finished with dispatch errors");
+      } else {
+        this.log?.info("[aeion] Message handled successfully");
+      }
     } catch (err) {
       this.log?.error(`[aeion] Error handling inbound message: ${err.message}`);
     }
@@ -414,6 +420,10 @@ class AeionChannelRuntime {
       }
 
       this.log?.info(`[aeion] Sending message to room ${botId}-${roomId || "main"}: "${text.substring(0, 50)}..."`);
+      const socket = this.getConnectedSocket();
+      if (!socket) {
+        throw new Error("aeion gateway is not connected");
+      }
 
       const msgPayload = {
         m: text || " ",
@@ -422,7 +432,7 @@ class AeionChannelRuntime {
         atts: attachments,
       };
 
-      this.socket.emit("msg_send", msgPayload);
+      socket.emit("msg_send", msgPayload);
       this.log?.info("[aeion] Message sent");
       return {
         channel: CHANNEL_ID,
@@ -433,6 +443,18 @@ class AeionChannelRuntime {
       this.log?.error(`[aeion] Error sending message: ${err.message}`);
       throw err;
     }
+  }
+
+  getConnectedSocket() {
+    if (this.socket?.connected) return this.socket;
+
+    const activeRuntime = getActiveRuntime(this.account.accountId);
+    if (activeRuntime?.socket?.connected) {
+      this.log?.info("[aeion] Using current active socket for delayed delivery");
+      return activeRuntime.socket;
+    }
+
+    return null;
   }
 
   async buildOutboundAttachments(mediaSpecs) {
@@ -463,17 +485,19 @@ class AeionChannelRuntime {
   }
 
   startTyping(botId, roomId) {
-    if (!this.socket) return;
+    const socket = this.getConnectedSocket();
+    if (!socket) return;
     const payload = { to: botId };
     if (roomId) payload.td = roomId;
-    this.socket.emit("typing", payload);
+    socket.emit("typing", payload);
   }
 
   stopTyping(botId, roomId) {
-    if (!this.socket) return;
+    const socket = this.getConnectedSocket();
+    if (!socket) return;
     const payload = { to: botId };
     if (roomId) payload.td = roomId;
-    this.socket.emit("typing_stop", payload);
+    socket.emit("typing_stop", payload);
   }
 
   async stop() {
@@ -589,21 +613,26 @@ export const aeionPlugin = {
         lastError: null,
       });
 
+      let runtime = null;
       try {
-        const runtime = new AeionChannelRuntime(account, ctx.cfg, ctx.log, statusSink);
+        runtime = new AeionChannelRuntime(account, ctx.cfg, ctx.log, statusSink);
         activeRuntimes.set(accountId, runtime);
         await runtime.start(ctx.abortSignal);
       } catch (err) {
         ctx.log?.error(`[aeion] Gateway error: ${err.message}`);
-        statusSink({ running: false, connected: false, lastError: err.message });
+        if (!runtime || activeRuntimes.get(accountId) === runtime) {
+          statusSink({ running: false, connected: false, lastError: err.message });
+        }
         throw err;
       } finally {
-        statusSink({
-          running: false,
-          connected: false,
-          lastStopAt: new Date().toISOString(),
-        });
-        activeRuntimes.delete(accountId);
+        if (!runtime || activeRuntimes.get(accountId) === runtime) {
+          statusSink({
+            running: false,
+            connected: false,
+            lastStopAt: new Date().toISOString(),
+          });
+          activeRuntimes.delete(accountId);
+        }
       }
     },
   },
